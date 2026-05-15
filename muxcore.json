@@ -1,0 +1,11 @@
+{
+  "name": "OIDC/SSO Auth Provider",
+  "description": "OpenID Connect and OAuth2 authentication provider for MuxCore. Supports Google, GitHub, Authelia, Authentik, Keycloak, and any OIDC-compliant provider.",
+  "version": "0.1.0",
+  "icon": "",
+  "author": "MuxCore",
+  "kind": "auth",
+  "capabilities": ["auth.oidc", "auth.sso"],
+  "dependencies": [],
+  "homepage": "https://github.com/Muxcore-Media/auth-oidc"
+}
