@@ -2,16 +2,10 @@ module github.com/Muxcore-Media/auth-oidc
 
 go 1.26.4
 
-replace github.com/Muxcore-Media/core => ../core
-
-replace github.com/Muxcore-Media/core/sdk/go/module => ../core/sdk/go/module
-
-replace github.com/Muxcore-Media/core/pkg/contracts => ../core/pkg/contracts
-
 require (
-	github.com/Muxcore-Media/core v0.4.0
-	github.com/Muxcore-Media/core/pkg/contracts v0.0.0
-	github.com/Muxcore-Media/core/sdk/go/module v0.1.0
+	github.com/Muxcore-Media/core v0.5.0
+	github.com/Muxcore-Media/core/pkg/contracts v0.5.0
+	github.com/Muxcore-Media/core/sdk/go/module v0.5.0
 	github.com/coreos/go-oidc/v3 v3.14.1
 	golang.org/x/oauth2 v0.36.0
 	google.golang.org/grpc v1.82.0
