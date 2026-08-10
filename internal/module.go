@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 
 	"google.golang.org/grpc"
@@ -22,6 +23,7 @@ import (
 	"github.com/Muxcore-Media/auth-oidc/internal/session"
 	"github.com/Muxcore-Media/auth-oidc/internal/webapp"
 	"github.com/Muxcore-Media/core/pkg/contracts"
+	modulesdk "github.com/Muxcore-Media/core/sdk/go/module"
 )
 
 type Module struct {
@@ -36,6 +38,7 @@ type Module struct {
 	sighupCh   chan os.Signal
 	sighupStop chan struct{}
 	sighupDone chan struct{}
+	cfgMu      sync.RWMutex
 
 	id           string
 	grpcAddr     string
@@ -158,11 +161,11 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Auth OIDC",
-		Version:      "0.1.0",
+		Version:      "0.1.2",
 		Roles:        []string{"security"},
 		Description:  "OIDC authentication and authorization provider",
 		Author:       "MuxCore",
-		Capabilities: []string{contracts.CapabilityAuth, contracts.CapabilityAuthorizer, contracts.CapabilityIdentity},
+		Capabilities: []string{contracts.CapabilityAuth, contracts.CapabilityAuthorizer, contracts.CapabilityIdentity, "settings"},
 		HTTPAddr:     m.grpcAddr,
 	}
 }
@@ -256,6 +259,7 @@ func (m *Module) ReloadPolicy() error {
 func (m *Module) Start(ctx context.Context) error {
 	m.grpcSrv = grpc.NewServer()
 	m.authSrv.RegisterWithGRPC(m.grpcSrv)
+	modulesdk.RegisterSettings(m.grpcSrv, m.id, m)
 	go func() {
 		slog.Info("auth-oidc gRPC started", "addr", m.grpcAddr)
 		if err := m.grpcSrv.Serve(m.grpcLis); err != nil {
