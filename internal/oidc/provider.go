@@ -2,6 +2,7 @@ package oidc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,33 @@ import (
 
 	"github.com/Muxcore-Media/auth-oidc/internal/roles"
 )
+
+// ErrNotConfigured is returned when OIDC IdP settings are unset.
+// The module still starts; login soft-fails until issuer/client/redirect are set.
+var ErrNotConfigured = errors.New("OIDC IdP not configured (set AUTH_OIDC_ISSUER, AUTH_OIDC_CLIENT_ID, AUTH_OIDC_REDIRECT_URL)")
+
+// IsConfigured reports whether f can drive a real login redirect.
+// Flows that omit Configured() are treated as configured (e.g. Fake, Provider).
+func IsConfigured(f Flow) bool {
+	if f == nil {
+		return false
+	}
+	if c, ok := f.(interface{ Configured() bool }); ok {
+		return c.Configured()
+	}
+	return true
+}
+
+// Disabled is a Flow used when IdP env/config is unset. Login soft-fails.
+type Disabled struct{}
+
+func (Disabled) Configured() bool { return false }
+
+func (Disabled) AuthCodeURL(state string) string { return "" }
+
+func (Disabled) Exchange(ctx context.Context, code string) (*Identity, error) {
+	return nil, ErrNotConfigured
+}
 
 // Identity is the normalized subject after a successful code exchange.
 type Identity struct {
