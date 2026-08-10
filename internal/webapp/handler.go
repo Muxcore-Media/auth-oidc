@@ -32,6 +32,7 @@ type stateEntry struct {
 type Handler struct {
 	sessions *session.Store
 	authSrv  *server.AuthServer
+	flowMu   sync.RWMutex
 	flow     oidc.Flow
 	codesMu  sync.Mutex
 	codes    map[string]*codeEntry
@@ -51,6 +52,19 @@ func New(sessions *session.Store, authSrv *server.AuthServer, flow oidc.Flow) *H
 	}
 	go h.cleanup()
 	return h
+}
+
+// SetFlow swaps the OIDC provider used by login/callback (live settings updates).
+func (h *Handler) SetFlow(flow oidc.Flow) {
+	h.flowMu.Lock()
+	h.flow = flow
+	h.flowMu.Unlock()
+}
+
+func (h *Handler) getFlow() oidc.Flow {
+	h.flowMu.RLock()
+	defer h.flowMu.RUnlock()
+	return h.flow
 }
 
 func (h *Handler) Stop() {
@@ -82,7 +96,7 @@ func (h *Handler) loginHandler(w http.ResponseWriter, r *http.Request) {
 		expiresAt: time.Now().Add(10 * time.Minute),
 	}
 	h.stateMu.Unlock()
-	http.Redirect(w, r, h.flow.AuthCodeURL(state), http.StatusFound)
+	http.Redirect(w, r, h.getFlow().AuthCodeURL(state), http.StatusFound)
 }
 
 func (h *Handler) callbackHandler(w http.ResponseWriter, r *http.Request) {
@@ -114,7 +128,7 @@ func (h *Handler) callbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ident, err := h.flow.Exchange(r.Context(), code)
+	ident, err := h.getFlow().Exchange(r.Context(), code)
 	if err != nil {
 		slog.Warn("oidc exchange failed", "error", err)
 		http.Error(w, "authentication failed", http.StatusUnauthorized)

@@ -1,9 +1,9 @@
 {
   "name": "Auth OIDC",
   "description": "OIDC authentication and authorization. Provides AuthProvider, Authorizer, and IdentityProvider via an external IdP (Authentik, Keycloak, etc.).",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "author": "MuxCore",
   "roles": ["security", "auth"],
-  "capabilities": ["auth", "authorizer", "identity"],
+  "capabilities": ["auth", "authorizer", "identity", "settings"],
   "contracts": []
 }

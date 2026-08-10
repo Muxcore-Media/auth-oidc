@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.2] — 2026-08-10
+
+### Added
+
+- SettingsProvider for OIDC knobs (`issuer`, `client_id`, `client_secret`, `redirect_url`, roles mapping) and `policy_file`
+- Live OIDC provider rebuild via `webapp.Handler.SetFlow`; policy reload on `policy_file` updates
+- Advertises `settings` capability for admin-ui discovery
+
 ## [Unreleased]
 
 ## [0.1.1] — 2026-08-09
