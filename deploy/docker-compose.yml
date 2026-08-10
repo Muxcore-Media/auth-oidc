@@ -1,0 +1,28 @@
+# Local IdP for auth-oidc integration tests (Keycloak).
+# No cloud IdP. Authentik is an equally valid alternative — see README.
+#
+#   KEYCLOAK_HOST_PORT=18080 docker compose -f deploy/docker-compose.yml up -d
+#   curl -sf http://127.0.0.1:18080/realms/muxcore/.well-known/openid-configuration
+#
+# go test skips this path when Docker is unavailable.
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "127.0.0.1:${KEYCLOAK_HOST_PORT:-18080}:8080"
+    volumes:
+      - ./keycloak/realm-muxcore.json:/opt/keycloak/data/import/realm-muxcore.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s

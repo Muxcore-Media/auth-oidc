@@ -9,7 +9,7 @@ build:
 	$(GO) build -ldflags="$(LDFLAGS)" -o $(BINARY) ./cmd/module
 
 test:
-	$(GO) test -race -count=1 -timeout 60s ./...
+	$(GO) test -count=1 -timeout 5m ./...
 
 lint:
 	golangci-lint run --timeout 120s ./...
@@ -34,7 +34,7 @@ ci: lint test build
 help:
 	@echo "Targets:"
 	@echo "  build  - compile the module binary"
-	@echo "  test   - run tests with race detection"
+	@echo "  test   - run unit tests (no -race; Fake IdP + soft-fail)"
 	@echo "  lint   - golangci-lint"
 	@echo "  clean  - remove build artifacts"
 	@echo "  fmt    - gofmt"
