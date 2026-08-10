@@ -84,6 +84,10 @@ func (h *Handler) loginHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "GET required", http.StatusMethodNotAllowed)
 		return
 	}
+	if !oidc.IsConfigured(h.getFlow()) {
+		http.Error(w, "OIDC IdP not configured", http.StatusServiceUnavailable)
+		return
+	}
 	redirect := safeRedirect(r.URL, r.URL.Query().Get("redirect"))
 	state, err := randomHex(16)
 	if err != nil {
@@ -102,6 +106,10 @@ func (h *Handler) loginHandler(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) callbackHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "GET required", http.StatusMethodNotAllowed)
+		return
+	}
+	if !oidc.IsConfigured(h.getFlow()) {
+		http.Error(w, "OIDC IdP not configured", http.StatusServiceUnavailable)
 		return
 	}
 	if errParam := r.URL.Query().Get("error"); errParam != "" {

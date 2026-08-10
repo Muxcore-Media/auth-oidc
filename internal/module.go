@@ -190,18 +190,23 @@ func (m *Module) Init(ctx context.Context) error {
 	m.authSrv = server.New(m.sessions, pol)
 
 	if m.flow == nil {
-		mapper := roles.NewMapper(m.rolesClaim, m.roleMap, m.defaultRoles)
-		flow, err := oidc.NewProvider(ctx, oidc.Config{
-			Issuer:       m.issuer,
-			ClientID:     m.clientID,
-			ClientSecret: m.clientSecret,
-			RedirectURL:  m.redirectURL,
-			Mapper:       mapper,
-		})
-		if err != nil {
-			return fmt.Errorf("init oidc: %w", err)
+		if m.issuer == "" || m.clientID == "" || m.redirectURL == "" {
+			slog.Warn("OIDC IdP unset; module starts but login soft-fails until AUTH_OIDC_ISSUER, AUTH_OIDC_CLIENT_ID, and AUTH_OIDC_REDIRECT_URL are set (default stacks use auth-local)")
+			m.flow = oidc.Disabled{}
+		} else {
+			mapper := roles.NewMapper(m.rolesClaim, m.roleMap, m.defaultRoles)
+			flow, err := oidc.NewProvider(ctx, oidc.Config{
+				Issuer:       m.issuer,
+				ClientID:     m.clientID,
+				ClientSecret: m.clientSecret,
+				RedirectURL:  m.redirectURL,
+				Mapper:       mapper,
+			})
+			if err != nil {
+				return fmt.Errorf("init oidc: %w", err)
+			}
+			m.flow = flow
 		}
-		m.flow = flow
 	}
 
 	m.grpcLis, err = net.Listen("tcp", m.grpcAddr)
@@ -279,6 +284,11 @@ func (m *Module) Start(ctx context.Context) error {
 	})
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if !m.IdPConfigured() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"status":"soft-disabled","reason":"OIDC IdP not configured"}`))
+			return
+		}
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 	m.httpSrv = &http.Server{Handler: mux}
@@ -347,7 +357,15 @@ func (m *Module) Health(ctx context.Context) error {
 	if m.sessions == nil || m.flow == nil {
 		return fmt.Errorf("not initialized")
 	}
+	if !m.IdPConfigured() {
+		return fmt.Errorf("OIDC IdP soft-disabled (set AUTH_OIDC_ISSUER, AUTH_OIDC_CLIENT_ID, AUTH_OIDC_REDIRECT_URL)")
+	}
 	return nil
+}
+
+// IdPConfigured reports whether a live OIDC IdP is wired (false when soft-disabled).
+func (m *Module) IdPConfigured() bool {
+	return oidc.IsConfigured(m.flow)
 }
 
 func (m *Module) HTTPAddr() string {
