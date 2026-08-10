@@ -104,13 +104,34 @@ export AUTH_OIDC_REDIRECT_URL=http://localhost:9411/oidc/callback
 export AUTH_OIDC_ROLE_MAP=admin=admin,user=user
 ```
 
-## gRPC AuthService
+## Parity with auth-local
 
-Implemented: `Validate`, `Revoke`, `ExtractIdentity`, `Can`.
+| Area | auth-local | auth-oidc |
+|------|------------|-----------|
+| Capabilities | `auth`, `authorizer`, `identity` | Same |
+| Browser login HTTP | `/login`, `/login/exchange` | Same contract; IdP redirect via `/oidc/callback` |
+| Session tokens | Opaque SHA-256 hex | Same shape / Validate / Revoke |
+| RBAC | `policies.yaml` (+ SIGHUP) | Same (`AUTH_OIDC_POLICY_FILE`) |
+| Password / TOTP / WebAuthn login | Local store | **IdP only** (not in this module) |
+| User CRUD / API tokens gRPC | Implemented | **Unimplemented** (IdP owns users) |
+| Drop-in for admin-ui | `ADMIN_UI_AUTH_ADDR` | Same — point at `:9411` HTTP |
 
-`Authenticate` returns an error payload directing clients to the HTTP OIDC flow.
-User CRUD, TOTP, WebAuthn, and API tokens return `Unimplemented` — manage users
-in the IdP (or keep `auth-local` for local admin user mgmt when not using SSO).
+Use **one** auth module per mesh. Prefer `auth-oidc` for SSO; use `auth-local` for offline/dev password auth.
+
+## gRPC AuthService — intentional Unimplemented RPCs
+
+**Implemented:** `Validate`, `Revoke`, `ExtractIdentity`, `Can`.
+
+`Authenticate` returns an error directing clients to the HTTP OIDC flow (no password path here).
+
+| RPC family | Methods | Behavior |
+|------------|---------|----------|
+| User CRUD | `CreateUser`, `DeleteUser`, `ListUsers`, `SetPassword`, `SetRoles` | `Unimplemented` — manage users/roles in the IdP |
+| TOTP | `EnableTOTP`, `DisableTOTP`, `TOTPStatus`, `VerifyTOTPSetup` | `Unimplemented` — MFA in the IdP |
+| WebAuthn | `ListWebAuthnCredentials`, `DeleteWebAuthnCredential`, `BeginAdminRegistration`, `CompleteAdminRegistration` | `Unimplemented` — passkeys in the IdP |
+| API tokens | `CreateAPIToken`, `ListAPITokens`, `DeleteAPIToken` | `Unimplemented` — not supported in auth-oidc |
+
+Covered by `TestUnimplementedUserCRUD` in `internal/server`.
 
 ## Build & test
 
