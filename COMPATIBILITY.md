@@ -4,7 +4,8 @@
 
 | Module Version | Core Version | Status |
 |----------------|-------------|--------|
-| v0.1.1           | 0.5.0+     | Current |
+| v0.1.2           | 0.5.0+     | Current |
+| v0.1.1           | 0.5.0+     | Superseded |
 | v0.1.0           | 0.4.0+     | Superseded |
 
 MVP host stacks pin **core@v0.5.0**. This module declares `minCoreVersion` **0.4.0**.
@@ -14,6 +15,13 @@ MVP host stacks pin **core@v0.5.0**. This module declares `minCoreVersion` **0.4
 - `auth`
 - `authorizer`
 - `identity`
+- `settings`
+
+## Soft-fail / optional
+
+`auth-oidc` is **optional**. Spool `minimal`/`media` and the installer default to
+`auth-local`. With IdP env unset, the process still starts; login/callback return
+HTTP 503 and Health reports soft-disabled until issuer/client/redirect are set.
 
 ## Contracts
 

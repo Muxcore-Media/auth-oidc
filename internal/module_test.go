@@ -19,6 +19,69 @@ import (
 	"github.com/Muxcore-Media/auth-oidc/internal/oidc"
 )
 
+func TestModuleSoftFailWhenIdPUnset(t *testing.T) {
+	mod := internal.NewModule(internal.Config{
+		GRPCAddr:   "127.0.0.1:0",
+		HTTPAddr:   "127.0.0.1:0",
+		DBPath:     filepath.Join(t.TempDir(), "oidc.db"),
+		PolicyFile: "/nonexistent-auth-oidc-policy.yaml",
+		// Issuer/ClientID/RedirectURL intentionally empty — soft-fail path.
+	})
+	ctx := context.Background()
+	if err := mod.Init(ctx); err != nil {
+		t.Fatalf("Init with IdP unset should soft-fail (succeed): %v", err)
+	}
+	if mod.IdPConfigured() {
+		t.Fatal("expected IdPConfigured=false when issuer unset")
+	}
+	if err := mod.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer mod.Stop(ctx)
+	if err := mod.Health(ctx); err == nil {
+		t.Fatal("Health should report unhealthy when IdP soft-disabled")
+	} else if !strings.Contains(err.Error(), "soft-disabled") {
+		t.Fatalf("Health err=%v want soft-disabled", err)
+	}
+
+	httpBase := "http://" + mod.HTTPAddr()
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(httpBase + "/login?redirect=/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("login status=%d body=%s want 503", resp.StatusCode, body)
+	}
+	if !strings.Contains(string(body), "OIDC IdP not configured") {
+		t.Fatalf("login body=%q want IdP not configured", body)
+	}
+
+	health, err := client.Get(httpBase + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer health.Body.Close()
+	hbody, _ := io.ReadAll(health.Body)
+	if health.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("health=%d body=%s want 503 soft-disabled", health.StatusCode, hbody)
+	}
+	if !strings.Contains(string(hbody), "soft-disabled") {
+		t.Fatalf("health body=%q want soft-disabled", hbody)
+	}
+
+	cb, err := client.Get(httpBase + "/oidc/callback?code=x&state=y")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cb.Body.Close()
+	if cb.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("callback status=%d want 503", cb.StatusCode)
+	}
+}
+
 func TestModuleLoginValidateRoundTrip(t *testing.T) {
 	fake := &oidc.Fake{
 		Identity: &oidc.Identity{
