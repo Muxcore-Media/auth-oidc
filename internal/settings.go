@@ -150,6 +150,12 @@ func (m *Module) applyOIDC(mutate func()) error {
 	if _, ok := m.flow.(*oidc.Fake); ok {
 		return nil
 	}
+	if issuer == "" || clientID == "" || redirectURL == "" {
+		flow := oidc.Disabled{}
+		m.flow = flow
+		m.webHandler.SetFlow(flow)
+		return nil
+	}
 	mapper := roles.NewMapper(rolesClaim, roleMap, defaultRoles)
 	flow, err := oidc.NewProvider(context.Background(), oidc.Config{
 		Issuer:       issuer,
