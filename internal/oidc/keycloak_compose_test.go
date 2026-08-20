@@ -117,7 +117,7 @@ func TestKeycloakComposeDiscovery(t *testing.T) {
 		Issuer:       issuer,
 		ClientID:     "muxcore",
 		ClientSecret: "muxcore-test-secret",
-		RedirectURL:  "http://127.0.0.1:9411/oidc/callback",
+		RedirectURL:  "http://127.0.0.1:9412/oidc/callback",
 	})
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)

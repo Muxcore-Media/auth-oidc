@@ -114,7 +114,7 @@ func NewModule(cfg Config) *Module {
 		cfg.GRPCAddr = ":9410"
 	}
 	if cfg.HTTPAddr == "" {
-		cfg.HTTPAddr = ":9411"
+		cfg.HTTPAddr = ":9412"
 	}
 	if cfg.PolicyFile == "" {
 		cfg.PolicyFile = "policies.yaml"

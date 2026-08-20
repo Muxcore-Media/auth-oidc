@@ -60,7 +60,7 @@ Session bearer tokens are opaque SHA-256 hex strings (24h TTL by default).
 | `AUTH_OIDC_CLIENT_SECRET` / `CLIENT_SECRET` | — | Client secret |
 | `AUTH_OIDC_REDIRECT_URL` / `REDIRECT_URL` | — | Must be `http(s)://<module-http>/oidc/callback` |
 | `AUTH_OIDC_GRPC_ADDR` | `:9410` | gRPC listen (AuthService) |
-| `AUTH_OIDC_HTTP_ADDR` | `:9411` | HTTP listen (login / callback / exchange) |
+| `AUTH_OIDC_HTTP_ADDR` | `:9412` | HTTP listen (login / callback / exchange) |
 | `AUTH_OIDC_POLICY_FILE` | `policies.yaml` | RBAC policy |
 | `AUTH_OIDC_ROLES_CLAIM` / `ROLES_CLAIM` | `groups` | Claim holding roles/groups |
 | `AUTH_OIDC_ROLE_MAP` | — | Optional `IdPRole=localRole,...` map |
@@ -109,7 +109,7 @@ Authentik works the same way as Keycloak once you set issuer/client/redirect
 ## Authentik example
 
 1. Create an OAuth2/OIDC provider application with redirect URI
-   `http://localhost:9411/oidc/callback`.
+   `http://localhost:9412/oidc/callback`.
 2. Note the **OpenID Configuration Issuer** URL (often ends with
    `/application/o/<slug>/`).
 3. Create a confidential client; copy client ID and secret.
@@ -119,7 +119,7 @@ Authentik works the same way as Keycloak once you set issuer/client/redirect
 export AUTH_OIDC_ISSUER=https://authentik.example.com/application/o/muxcore/
 export AUTH_OIDC_CLIENT_ID=muxcore
 export AUTH_OIDC_CLIENT_SECRET=...
-export AUTH_OIDC_REDIRECT_URL=http://localhost:9411/oidc/callback
+export AUTH_OIDC_REDIRECT_URL=http://localhost:9412/oidc/callback
 export AUTH_OIDC_ROLE_MAP=muxcore-admins=admin,muxcore-users=user
 export MUXCORE_INSECURE_DISABLE_TLS=true
 
@@ -130,13 +130,13 @@ make build
 Point admin-ui at the module HTTP port:
 
 ```bash
-export ADMIN_UI_AUTH_ADDR=http://localhost:9411
+export ADMIN_UI_AUTH_ADDR=http://localhost:9412
 ```
 
 ## Keycloak example
 
 1. Create a client (`muxcore`) with **Standard flow** enabled and
-   Valid redirect URI `http://localhost:9411/oidc/callback`.
+   Valid redirect URI `http://localhost:9412/oidc/callback`.
 2. Issuer is typically `https://keycloak.example.com/realms/<realm>`
    (or the compose URL above for laptop).
 3. Client authentication: On (confidential); copy secret from Credentials.
@@ -149,7 +149,7 @@ export ADMIN_UI_AUTH_ADDR=http://localhost:9411
 export AUTH_OIDC_ISSUER=https://keycloak.example.com/realms/muxcore
 export AUTH_OIDC_CLIENT_ID=muxcore
 export AUTH_OIDC_CLIENT_SECRET=...
-export AUTH_OIDC_REDIRECT_URL=http://localhost:9411/oidc/callback
+export AUTH_OIDC_REDIRECT_URL=http://localhost:9412/oidc/callback
 export AUTH_OIDC_ROLE_MAP=admin=admin,user=user
 ```
 
@@ -164,7 +164,7 @@ export AUTH_OIDC_ROLE_MAP=admin=admin,user=user
 | RBAC | `policies.yaml` (+ SIGHUP) | Same (`AUTH_OIDC_POLICY_FILE`) |
 | Password / TOTP / WebAuthn login | Local store | **IdP only** (not in this module) |
 | User CRUD / API tokens gRPC | Implemented | **Unimplemented** (IdP owns users) |
-| Drop-in for admin-ui | `ADMIN_UI_AUTH_ADDR` | Same — point at `:9411` HTTP |
+| Drop-in for admin-ui | `ADMIN_UI_AUTH_ADDR` | Same — point at `:9412` HTTP |
 
 Use **one** auth module per mesh. Prefer `auth-local` for installer/laptop demos;
 switch to `auth-oidc` for SSO against a self-hosted IdP.
