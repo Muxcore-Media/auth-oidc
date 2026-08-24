@@ -12,7 +12,7 @@ func TestCreateGetDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer s.Close()
+	t.Cleanup(func() { _ = s.Close() })
 
 	sess, err := s.Create("uid-1", "alice", []string{"admin", "user"})
 	if err != nil {
@@ -53,7 +53,7 @@ func TestExpired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	defer s.Close()
+	t.Cleanup(func() { _ = s.Close() })
 
 	sess, err := s.Create("u", "bob", nil)
 	if err != nil {
@@ -85,7 +85,7 @@ func TestDurableAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}
-	defer s2.Close()
+	t.Cleanup(func() { _ = s2.Close() })
 	got, err := s2.Get(token)
 	if err != nil {
 		t.Fatalf("Get after reopen: %v", err)

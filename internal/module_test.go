@@ -37,7 +37,7 @@ func TestModuleSoftFailWhenIdPUnset(t *testing.T) {
 	if err := mod.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer mod.Stop(ctx)
+	t.Cleanup(func() { _ = mod.Stop(ctx) })
 	if err := mod.Health(ctx); err == nil {
 		t.Fatal("Health should report unhealthy when IdP soft-disabled")
 	} else if !strings.Contains(err.Error(), "soft-disabled") {
@@ -50,7 +50,7 @@ func TestModuleSoftFailWhenIdPUnset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	t.Cleanup(func() { _ = resp.Body.Close() })
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("login status=%d body=%s want 503", resp.StatusCode, body)
@@ -63,7 +63,7 @@ func TestModuleSoftFailWhenIdPUnset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer health.Body.Close()
+	t.Cleanup(func() { _ = health.Body.Close() })
 	hbody, _ := io.ReadAll(health.Body)
 	if health.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("health=%d body=%s want 503 soft-disabled", health.StatusCode, hbody)
@@ -76,7 +76,7 @@ func TestModuleSoftFailWhenIdPUnset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer cb.Body.Close()
+	t.Cleanup(func() { _ = cb.Body.Close() })
 	if cb.StatusCode != http.StatusServiceUnavailable {
 		t.Fatalf("callback status=%d want 503", cb.StatusCode)
 	}
@@ -104,7 +104,7 @@ func TestModuleLoginValidateRoundTrip(t *testing.T) {
 	if err := mod.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	defer mod.Stop(ctx)
+	t.Cleanup(func() { _ = mod.Stop(ctx) })
 
 	httpBase := "http://" + mod.HTTPAddr()
 	client := &http.Client{
@@ -118,7 +118,7 @@ func TestModuleLoginValidateRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusFound {
 		t.Fatalf("login=%d", resp.StatusCode)
 	}
@@ -129,7 +129,7 @@ func TestModuleLoginValidateRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cb.Body.Close()
+	_ = cb.Body.Close()
 	if cb.StatusCode != http.StatusSeeOther {
 		t.Fatalf("callback=%d", cb.StatusCode)
 	}
@@ -142,7 +142,7 @@ func TestModuleLoginValidateRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ex.Body.Close()
+	t.Cleanup(func() { _ = ex.Body.Close() })
 	body, _ := io.ReadAll(ex.Body)
 	if ex.StatusCode != http.StatusOK {
 		t.Fatalf("exchange=%d body=%s", ex.StatusCode, body)
@@ -158,7 +158,7 @@ func TestModuleLoginValidateRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	t.Cleanup(func() { _ = conn.Close() })
 	auth := authv1.NewAuthServiceClient(conn)
 	v, err := auth.Validate(ctx, &authv1.ValidateRequest{Token: payload.Token})
 	if err != nil {
