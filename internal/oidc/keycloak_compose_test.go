@@ -35,7 +35,7 @@ func freePort(t *testing.T) int {
 	if err != nil {
 		t.Fatalf("freePort: %v", err)
 	}
-	defer lis.Close()
+	t.Cleanup(func() { _ = lis.Close() })
 	return lis.Addr().(*net.TCPAddr).Port
 }
 
@@ -98,7 +98,7 @@ func TestKeycloakComposeDiscovery(t *testing.T) {
 		resp, err := http.Get(wellKnown)
 		if err == nil {
 			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK && json.Unmarshal(body, &meta) == nil {
 				if _, ok := meta["authorization_endpoint"].(string); ok {
 					break
