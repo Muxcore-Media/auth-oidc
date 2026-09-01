@@ -86,7 +86,7 @@ func (s *AuthServer) Validate(ctx context.Context, req *authv1.ValidateRequest) 
 }
 
 func (s *AuthServer) Revoke(ctx context.Context, req *authv1.RevokeRequest) (*authv1.RevokeResponse, error) {
-	s.sessions.Delete(req.Token)
+	s.sessions.Revoke(req.Token)
 	return &authv1.RevokeResponse{}, nil
 }
 

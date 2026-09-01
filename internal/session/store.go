@@ -167,7 +167,35 @@ func (s *Store) Identity(userID string) (*Identity, error) {
 }
 
 func (s *Store) Delete(token string) {
+	s.Revoke(token)
+}
+
+// Revoke deletes a session and drops the identity row when no sessions remain.
+func (s *Store) Revoke(token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	userID := s.deleteSessionLocked(token)
+	if userID != "" {
+		s.cleanupIdentityIfNoSessionsLocked(userID)
+	}
+}
+
+func (s *Store) deleteSessionLocked(token string) string {
+	row := s.db.QueryRow(`SELECT user_id FROM sessions WHERE token = ?`, token)
+	var userID string
+	if err := row.Scan(&userID); err != nil {
+		return ""
+	}
 	_, _ = s.db.Exec(`DELETE FROM sessions WHERE token = ?`, token)
+	return userID
+}
+
+func (s *Store) cleanupIdentityIfNoSessionsLocked(userID string) {
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE user_id = ?`, userID).Scan(&count); err != nil || count > 0 {
+		return
+	}
+	_, _ = s.db.Exec(`DELETE FROM identities WHERE user_id = ?`, userID)
 }
 
 func (s *Store) Count() int {
