@@ -7,16 +7,19 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Muxcore-Media/auth-oidc/internal/oidc"
+	"golang.org/x/oauth2"
 )
 
 func dockerAvailable() bool {
@@ -45,13 +48,12 @@ func deployDir(t *testing.T) string {
 	if !ok {
 		t.Fatal("runtime.Caller failed")
 	}
-	// internal/oidc → repo root → deploy
 	return filepath.Join(filepath.Dir(file), "..", "..", "deploy")
 }
 
 // TestKeycloakComposeDiscovery starts local Keycloak via Docker Compose and
-// verifies OIDC discovery + AuthCodeURL. Skips when Docker is unavailable —
-// Fake IdP unit tests cover login without a live issuer.
+// verifies OIDC discovery, PKCE auth-code login as alice/alice, and groups claim.
+// Skips when Docker is unavailable.
 func TestKeycloakComposeDiscovery(t *testing.T) {
 	if !dockerAvailable() {
 		t.Skip("docker not available; Fake IdP unit tests cover login; see deploy/docker-compose.yml for local Keycloak (Authentik also fine)")
@@ -74,7 +76,6 @@ func TestKeycloakComposeDiscovery(t *testing.T) {
 	up.Dir = dir
 	up.Env = env
 	if out, err := up.CombinedOutput(); err != nil {
-		// --wait may fail on older compose; fall back to up -d + poll.
 		t.Logf("compose up --wait: %v\n%s\nfalling back to up -d + poll", err, out)
 		up2 := exec.Command("docker", "compose", "-f", composeFile, "up", "-d")
 		up2.Dir = dir
@@ -111,18 +112,23 @@ func TestKeycloakComposeDiscovery(t *testing.T) {
 		time.Sleep(2 * time.Second)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	redirectURL := fmt.Sprintf("http://127.0.0.1:%d/oidc/callback", freePort(t))
 	p, err := oidc.NewProvider(ctx, oidc.Config{
 		Issuer:       issuer,
 		ClientID:     "muxcore",
 		ClientSecret: "muxcore-test-secret",
-		RedirectURL:  "http://127.0.0.1:9412/oidc/callback",
+		RedirectURL:  redirectURL,
 	})
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
-	authURL := p.AuthCodeURL("test-state")
+
+	verifier := oauth2.GenerateVerifier()
+	state := "test-state"
+	params := oidc.AuthParams{PKCEVerifier: verifier, Nonce: "nonce-kc-test"}
+	authURL := p.AuthCodeURL(state, params)
 	u, err := url.Parse(authURL)
 	if err != nil {
 		t.Fatalf("AuthCodeURL parse: %v", err)
@@ -133,9 +139,107 @@ func TestKeycloakComposeDiscovery(t *testing.T) {
 	if u.Query().Get("client_id") != "muxcore" {
 		t.Fatalf("client_id=%q", u.Query().Get("client_id"))
 	}
-	if u.Query().Get("state") != "test-state" {
+	if u.Query().Get("state") != state {
 		t.Fatalf("state=%q", u.Query().Get("state"))
 	}
+	if u.Query().Get("code_challenge") == "" {
+		t.Fatal("expected PKCE code_challenge")
+	}
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{
+		Jar:     jar,
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("too many redirects")
+			}
+			return nil
+		},
+	}
+
+	loginPage, err := client.Get(authURL)
+	if err != nil {
+		t.Fatalf("authorize GET: %v", err)
+	}
+	body, _ := io.ReadAll(loginPage.Body)
+	_ = loginPage.Body.Close()
+	if loginPage.StatusCode != http.StatusOK {
+		t.Fatalf("login page status=%d body=%s", loginPage.StatusCode, body)
+	}
+	formAction := extractFormAction(string(body))
+	if formAction == "" {
+		t.Fatal("login form action not found")
+	}
+	if !strings.HasPrefix(formAction, "http") {
+		formAction = strings.TrimSuffix(loginPage.Request.URL.Scheme+"://"+loginPage.Request.URL.Host, "") + formAction
+		if strings.HasPrefix(formAction, "://") {
+			base := fmt.Sprintf("http://127.0.0.1:%d", port)
+			formAction = base + extractFormAction(string(body))
+		}
+	}
+	if !strings.HasPrefix(formAction, "http") {
+		formAction = fmt.Sprintf("http://127.0.0.1:%d%s", port, extractFormAction(string(body)))
+	}
+
+	form := url.Values{}
+	form.Set("username", "alice")
+	form.Set("password", "alice")
+	loginResp, err := client.PostForm(formAction, form)
+	if err != nil {
+		t.Fatalf("login POST: %v", err)
+	}
+	finalURL := loginResp.Request.URL.String()
+	_ = loginResp.Body.Close()
+
+	if !strings.HasPrefix(finalURL, redirectURL) {
+		// Keycloak may redirect through an intermediate consent page; follow once more.
+		if loginResp.StatusCode == http.StatusFound || loginResp.StatusCode == http.StatusSeeOther {
+			loc := loginResp.Header.Get("Location")
+			if loc != "" {
+				follow, err := client.Get(loc)
+				if err == nil {
+					finalURL = follow.Request.URL.String()
+					_ = follow.Body.Close()
+				}
+			}
+		}
+	}
+	cbURL, err := url.Parse(finalURL)
+	if err != nil || !strings.HasPrefix(cbURL.String(), redirectURL) {
+		t.Fatalf("expected callback redirect to %s got %q", redirectURL, finalURL)
+	}
+	code := cbURL.Query().Get("code")
+	if code == "" {
+		t.Fatalf("missing code in callback URL %q", finalURL)
+	}
+	if cbURL.Query().Get("state") != state {
+		t.Fatalf("state=%q", cbURL.Query().Get("state"))
+	}
+
+	ident, err := p.Exchange(ctx, code, params)
+	if err != nil {
+		t.Fatalf("Exchange: %v", err)
+	}
+	if ident.Username != "alice" {
+		t.Fatalf("username=%q", ident.Username)
+	}
+	if len(ident.Roles) == 0 || ident.Roles[0] != "user" {
+		t.Fatalf("roles=%v want user from groups mapper", ident.Roles)
+	}
+}
+
+var formActionRE = regexp.MustCompile(`action="([^"]+)"`)
+
+func extractFormAction(html string) string {
+	m := formActionRE.FindStringSubmatch(html)
+	if len(m) < 2 {
+		return ""
+	}
+	return strings.ReplaceAll(m[1], "&amp;", "&")
 }
 
 func TestDisabledExchange(t *testing.T) {
@@ -149,10 +253,10 @@ func TestDisabledExchange(t *testing.T) {
 	if oidc.IsConfigured(d) {
 		t.Fatal("Disabled should not be configured via IsConfigured")
 	}
-	if d.AuthCodeURL("s") != "" {
+	if d.AuthCodeURL("s", oidc.AuthParams{}) != "" {
 		t.Fatal("Disabled AuthCodeURL should be empty")
 	}
-	_, err := d.Exchange(context.Background(), "x")
+	_, err := d.Exchange(context.Background(), "x", oidc.AuthParams{})
 	if err == nil || !strings.Contains(err.Error(), "not configured") {
 		t.Fatalf("Exchange err=%v", err)
 	}

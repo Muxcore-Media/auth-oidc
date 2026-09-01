@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Muxcore-Media/auth-oidc/internal/oidc"
+	"github.com/Muxcore-Media/auth-oidc/internal/redirectallow"
 	"github.com/Muxcore-Media/auth-oidc/internal/roles"
 	"github.com/Muxcore-Media/core/pkg/contracts"
 	modulesdk "github.com/Muxcore-Media/core/sdk/go/module"
@@ -56,6 +58,15 @@ func (m *Module) settingsDefs() []contracts.SettingDef {
 			Group:       "OIDC",
 		},
 		{
+			Key:         "scopes",
+			Label:       "OIDC Scopes",
+			Type:        contracts.SettingTypeString,
+			Value:       m.scopes,
+			Default:     "openid profile email",
+			Description: "Space/comma-separated scopes (AUTH_OIDC_SCOPES)",
+			Group:       "OIDC",
+		},
+		{
 			Key:         "roles_claim",
 			Label:       "Roles Claim",
 			Type:        contracts.SettingTypeString,
@@ -79,6 +90,23 @@ func (m *Module) settingsDefs() []contracts.SettingDef {
 			Value:       m.defaultRoles,
 			Description: "Fallback roles when claim empty (AUTH_OIDC_DEFAULT_ROLES)",
 			Group:       "OIDC",
+		},
+		{
+			Key:         "allowed_redirect_hosts",
+			Label:       "Allowed Redirect Hosts",
+			Type:        contracts.SettingTypeString,
+			Value:       m.allowedRedirectHosts,
+			Description: "Comma-separated hosts/URLs for post-login redirect (AUTH_ALLOWED_REDIRECT_HOSTS)",
+			Group:       "HTTP",
+		},
+		{
+			Key:         "session_ttl",
+			Label:       "Session TTL",
+			Type:        contracts.SettingTypeString,
+			Value:       m.sessionTTL.String(),
+			Default:     (24 * time.Hour).String(),
+			Description: "MuxCore session lifetime (AUTH_OIDC_SESSION_TTL, e.g. 24h)",
+			Group:       "HTTP",
 		},
 		{
 			Key:         "policy_file",
@@ -106,6 +134,8 @@ func (m *Module) updateSetting(key, value string) error {
 		return m.applyOIDC(func() { m.clientSecret = value })
 	case "redirect_url", "AUTH_OIDC_REDIRECT_URL", "REDIRECT_URL":
 		return m.applyOIDC(func() { m.redirectURL = value })
+	case "scopes", "AUTH_OIDC_SCOPES":
+		return m.applyOIDC(func() { m.scopes = value })
 	case "roles_claim", "AUTH_OIDC_ROLES_CLAIM", "ROLES_CLAIM":
 		if value == "" {
 			value = "groups"
@@ -115,6 +145,24 @@ func (m *Module) updateSetting(key, value string) error {
 		return m.applyOIDC(func() { m.roleMap = value })
 	case "default_roles", "AUTH_OIDC_DEFAULT_ROLES":
 		return m.applyOIDC(func() { m.defaultRoles = value })
+	case "allowed_redirect_hosts", "AUTH_ALLOWED_REDIRECT_HOSTS":
+		m.cfgMu.Lock()
+		m.allowedRedirectHosts = value
+		m.cfgMu.Unlock()
+		redirectallow.SetExtraHosts(value)
+		return nil
+	case "session_ttl", "AUTH_OIDC_SESSION_TTL":
+		if value == "" {
+			return fmt.Errorf("session_ttl must not be empty")
+		}
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			return fmt.Errorf("invalid session_ttl: %w", err)
+		}
+		m.cfgMu.Lock()
+		m.sessionTTL = d
+		m.cfgMu.Unlock()
+		return nil
 	case "policy_file", "AUTH_OIDC_POLICY_FILE":
 		if value == "" {
 			return fmt.Errorf("policy_file must not be empty")
@@ -138,6 +186,7 @@ func (m *Module) applyOIDC(mutate func()) error {
 	clientID := m.clientID
 	clientSecret := m.clientSecret
 	redirectURL := m.redirectURL
+	scopes := m.scopes
 	rolesClaim := m.rolesClaim
 	roleMap := m.roleMap
 	defaultRoles := m.defaultRoles
@@ -156,12 +205,15 @@ func (m *Module) applyOIDC(mutate func()) error {
 		m.webHandler.SetFlow(flow)
 		return nil
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), oidcDiscoveryTimeout())
+	defer cancel()
 	mapper := roles.NewMapper(rolesClaim, roleMap, defaultRoles)
-	flow, err := oidc.NewProvider(context.Background(), oidc.Config{
+	flow, err := oidc.NewProvider(ctx, oidc.Config{
 		Issuer:       issuer,
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		RedirectURL:  redirectURL,
+		Scopes:       splitScopes(scopes),
 		Mapper:       mapper,
 	})
 	if err != nil {
@@ -170,4 +222,8 @@ func (m *Module) applyOIDC(mutate func()) error {
 	m.flow = flow
 	m.webHandler.SetFlow(flow)
 	return nil
+}
+
+func oidcDiscoveryTimeout() time.Duration {
+	return 15 * time.Second
 }

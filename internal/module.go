@@ -13,11 +13,13 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
 
 	"github.com/Muxcore-Media/auth-oidc/internal/oidc"
 	"github.com/Muxcore-Media/auth-oidc/internal/policy"
+	"github.com/Muxcore-Media/auth-oidc/internal/redirectallow"
 	"github.com/Muxcore-Media/auth-oidc/internal/roles"
 	"github.com/Muxcore-Media/auth-oidc/internal/server"
 	"github.com/Muxcore-Media/auth-oidc/internal/session"
@@ -38,6 +40,8 @@ type Module struct {
 	sighupCh   chan os.Signal
 	sighupStop chan struct{}
 	sighupDone chan struct{}
+	cleanupStop chan struct{}
+	cleanupDone chan struct{}
 	cfgMu      sync.RWMutex
 
 	id           string
@@ -49,9 +53,12 @@ type Module struct {
 	clientID     string
 	clientSecret string
 	redirectURL  string
+	scopes       string
 	rolesClaim   string
 	roleMap      string
 	defaultRoles string
+	allowedRedirectHosts string
+	sessionTTL   time.Duration
 }
 
 // Config holds module settings. Non-empty fields override environment.
@@ -65,9 +72,12 @@ type Config struct {
 	ClientID     string
 	ClientSecret string
 	RedirectURL  string
+	Scopes       string
 	RolesClaim   string
 	RoleMap      string
 	DefaultRoles string
+	AllowedRedirectHosts string
+	SessionTTL   time.Duration
 	// Flow overrides the OIDC provider (tests).
 	Flow oidc.Flow
 }
@@ -100,6 +110,9 @@ func NewModule(cfg Config) *Module {
 	if cfg.RedirectURL == "" {
 		cfg.RedirectURL = firstEnv("AUTH_OIDC_REDIRECT_URL", "REDIRECT_URL")
 	}
+	if cfg.Scopes == "" {
+		cfg.Scopes = os.Getenv("AUTH_OIDC_SCOPES")
+	}
 	if cfg.RolesClaim == "" {
 		cfg.RolesClaim = firstEnv("AUTH_OIDC_ROLES_CLAIM", "ROLES_CLAIM")
 	}
@@ -108,6 +121,9 @@ func NewModule(cfg Config) *Module {
 	}
 	if cfg.DefaultRoles == "" {
 		cfg.DefaultRoles = os.Getenv("AUTH_OIDC_DEFAULT_ROLES")
+	}
+	if cfg.AllowedRedirectHosts == "" {
+		cfg.AllowedRedirectHosts = os.Getenv("AUTH_ALLOWED_REDIRECT_HOSTS")
 	}
 
 	if cfg.GRPCAddr == "" {
@@ -130,22 +146,42 @@ func NewModule(cfg Config) *Module {
 			cfg.DBPath = filepath.Join(home, ".muxcore", "auth-oidc.db")
 		}
 	}
+	if cfg.SessionTTL <= 0 {
+		cfg.SessionTTL = parseDurationEnv("AUTH_OIDC_SESSION_TTL", session.DefaultTTL)
+	}
+
+	redirectallow.SetExtraHosts(cfg.AllowedRedirectHosts)
 
 	return &Module{
-		id:           cfg.ID,
-		grpcAddr:     cfg.GRPCAddr,
-		httpAddr:     cfg.HTTPAddr,
-		dbPath:       cfg.DBPath,
-		policyFile:   cfg.PolicyFile,
-		issuer:       cfg.Issuer,
-		clientID:     cfg.ClientID,
-		clientSecret: cfg.ClientSecret,
-		redirectURL:  cfg.RedirectURL,
-		rolesClaim:   cfg.RolesClaim,
-		roleMap:      cfg.RoleMap,
-		defaultRoles: cfg.DefaultRoles,
-		flow:         cfg.Flow,
+		id:                   cfg.ID,
+		grpcAddr:             cfg.GRPCAddr,
+		httpAddr:             cfg.HTTPAddr,
+		dbPath:               cfg.DBPath,
+		policyFile:           cfg.PolicyFile,
+		issuer:               cfg.Issuer,
+		clientID:             cfg.ClientID,
+		clientSecret:         cfg.ClientSecret,
+		redirectURL:          cfg.RedirectURL,
+		scopes:               cfg.Scopes,
+		rolesClaim:           cfg.RolesClaim,
+		roleMap:              cfg.RoleMap,
+		defaultRoles:         cfg.DefaultRoles,
+		allowedRedirectHosts: cfg.AllowedRedirectHosts,
+		sessionTTL:           cfg.SessionTTL,
+		flow:                 cfg.Flow,
 	}
+}
+
+func parseDurationEnv(key string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return fallback
+	}
+	return d
 }
 
 func firstEnv(keys ...string) string {
@@ -166,7 +202,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 		Description:  "OIDC authentication and authorization provider",
 		Author:       "MuxCore",
 		Capabilities: []string{contracts.CapabilityAuth, contracts.CapabilityAuthorizer, contracts.CapabilityIdentity, "settings"},
-		HTTPAddr:     m.grpcAddr,
+		HTTPAddr:     m.httpAddr,
 	}
 }
 
@@ -178,7 +214,7 @@ func (m *Module) Init(ctx context.Context) error {
 	}
 
 	var err error
-	m.sessions, err = session.New(m.dbPath, 0)
+	m.sessions, err = session.New(m.dbPath, m.sessionTTL)
 	if err != nil {
 		return fmt.Errorf("init sessions: %w", err)
 	}
@@ -194,14 +230,7 @@ func (m *Module) Init(ctx context.Context) error {
 			slog.Warn("OIDC IdP unset; module starts but login soft-fails until AUTH_OIDC_ISSUER, AUTH_OIDC_CLIENT_ID, and AUTH_OIDC_REDIRECT_URL are set (default stacks use auth-local)")
 			m.flow = oidc.Disabled{}
 		} else {
-			mapper := roles.NewMapper(m.rolesClaim, m.roleMap, m.defaultRoles)
-			flow, err := oidc.NewProvider(ctx, oidc.Config{
-				Issuer:       m.issuer,
-				ClientID:     m.clientID,
-				ClientSecret: m.clientSecret,
-				RedirectURL:  m.redirectURL,
-				Mapper:       mapper,
-			})
+			flow, err := m.buildProvider(ctx)
 			if err != nil {
 				return fmt.Errorf("init oidc: %w", err)
 			}
@@ -226,8 +255,38 @@ func (m *Module) Init(ctx context.Context) error {
 		"redirect", m.redirectURL,
 		"policy", m.policyFile,
 		"roles_claim", m.rolesClaim,
+		"session_ttl", m.sessionTTL,
 	)
 	return nil
+}
+
+func (m *Module) buildProvider(ctx context.Context) (oidc.Flow, error) {
+	mapper := roles.NewMapper(m.rolesClaim, m.roleMap, m.defaultRoles)
+	return oidc.NewProvider(ctx, oidc.Config{
+		Issuer:       m.issuer,
+		ClientID:     m.clientID,
+		ClientSecret: m.clientSecret,
+		RedirectURL:  m.redirectURL,
+		Scopes:       splitScopes(m.scopes),
+		Mapper:       mapper,
+	})
+}
+
+func splitScopes(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ' '
+	})
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (m *Module) loadPolicy() (*policy.Policy, error) {
@@ -284,9 +343,9 @@ func (m *Module) Start(ctx context.Context) error {
 	})
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if !m.IdPConfigured() {
+		if err := m.Health(r.Context()); err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"status":"soft-disabled","reason":"OIDC IdP not configured"}`))
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"status":"unhealthy","reason":%q}`, err.Error())))
 			return
 		}
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
@@ -296,6 +355,26 @@ func (m *Module) Start(ctx context.Context) error {
 		slog.Info("auth-oidc HTTP started", "addr", m.httpAddr)
 		if err := m.httpSrv.Serve(m.httpLis); err != nil && err != http.ErrServerClosed {
 			slog.Error("auth-oidc HTTP error", "error", err)
+		}
+	}()
+
+	cleanupStop := make(chan struct{})
+	cleanupDone := make(chan struct{})
+	m.cleanupStop = cleanupStop
+	m.cleanupDone = cleanupDone
+	go func() {
+		defer close(cleanupDone)
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-cleanupStop:
+				return
+			case <-ticker.C:
+				if m.sessions != nil {
+					_ = m.sessions.CleanupExpired()
+				}
+			}
 		}
 	}()
 
@@ -324,6 +403,12 @@ func (m *Module) Start(ctx context.Context) error {
 }
 
 func (m *Module) Stop(ctx context.Context) error {
+	if m.cleanupStop != nil {
+		close(m.cleanupStop)
+		if m.cleanupDone != nil {
+			<-m.cleanupDone
+		}
+	}
 	if m.sighupStop != nil {
 		select {
 		case <-m.sighupStop:
@@ -359,6 +444,9 @@ func (m *Module) Health(ctx context.Context) error {
 	}
 	if !m.IdPConfigured() {
 		return fmt.Errorf("OIDC IdP soft-disabled (set AUTH_OIDC_ISSUER, AUTH_OIDC_CLIENT_ID, AUTH_OIDC_REDIRECT_URL)")
+	}
+	if err := m.flow.HealthCheck(ctx); err != nil {
+		return fmt.Errorf("IdP unreachable: %w", err)
 	}
 	return nil
 }

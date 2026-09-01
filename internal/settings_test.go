@@ -37,6 +37,9 @@ func TestSettings_PreInit(t *testing.T) {
 	if info.Version != "0.1.2" {
 		t.Fatalf("version=%q", info.Version)
 	}
+	if info.HTTPAddr != ":9412" {
+		t.Fatalf("HTTPAddr=%q want :9412", info.HTTPAddr)
+	}
 	found := false
 	for _, c := range info.Capabilities {
 		if c == "settings" {

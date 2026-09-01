@@ -12,8 +12,10 @@ import (
 	"time"
 
 	authv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/auth/v1"
+	"golang.org/x/oauth2"
 
 	"github.com/Muxcore-Media/auth-oidc/internal/oidc"
+	"github.com/Muxcore-Media/auth-oidc/internal/redirectallow"
 	"github.com/Muxcore-Media/auth-oidc/internal/server"
 	"github.com/Muxcore-Media/auth-oidc/internal/session"
 )
@@ -24,21 +26,23 @@ type codeEntry struct {
 }
 
 type stateEntry struct {
-	redirect  string
-	expiresAt time.Time
+	redirect     string
+	pkceVerifier string
+	nonce        string
+	expiresAt    time.Time
 }
 
 // Handler serves the auth-local-compatible browser login contract.
 type Handler struct {
-	sessions *session.Store
-	authSrv  *server.AuthServer
-	flowMu   sync.RWMutex
-	flow     oidc.Flow
-	codesMu  sync.Mutex
-	codes    map[string]*codeEntry
-	stateMu  sync.Mutex
-	states   map[string]*stateEntry
-	stopCh   chan struct{}
+	sessions   *session.Store
+	authSrv    *server.AuthServer
+	flowMu     sync.RWMutex
+	flow       oidc.Flow
+	codesMu    sync.Mutex
+	codes      map[string]*codeEntry
+	stateMu    sync.Mutex
+	states     map[string]*stateEntry
+	stopCh     chan struct{}
 }
 
 func New(sessions *session.Store, authSrv *server.AuthServer, flow oidc.Flow) *Handler {
@@ -75,6 +79,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/login", h.loginHandler)
 	mux.HandleFunc("/oidc/callback", h.callbackHandler)
 	mux.HandleFunc("/login/exchange", h.exchangeHandler)
+	mux.HandleFunc("/logout", h.logoutHandler)
 	mux.HandleFunc("/session/validate", h.validateHandler)
 	mux.HandleFunc("/session/revoke", h.revokeHandler)
 }
@@ -94,13 +99,22 @@ func (h *Handler) loginHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	pkceVerifier := oauth2.GenerateVerifier()
+	nonce, err := randomHex(16)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	h.stateMu.Lock()
 	h.states[state] = &stateEntry{
-		redirect:  redirect,
-		expiresAt: time.Now().Add(10 * time.Minute),
+		redirect:     redirect,
+		pkceVerifier: pkceVerifier,
+		nonce:        nonce,
+		expiresAt:    time.Now().Add(10 * time.Minute),
 	}
 	h.stateMu.Unlock()
-	http.Redirect(w, r, h.getFlow().AuthCodeURL(state), http.StatusFound)
+	params := oidc.AuthParams{PKCEVerifier: pkceVerifier, Nonce: nonce}
+	http.Redirect(w, r, h.getFlow().AuthCodeURL(state, params), http.StatusFound)
 }
 
 func (h *Handler) callbackHandler(w http.ResponseWriter, r *http.Request) {
@@ -136,7 +150,8 @@ func (h *Handler) callbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ident, err := h.getFlow().Exchange(r.Context(), code)
+	params := oidc.AuthParams{PKCEVerifier: entry.pkceVerifier, Nonce: entry.nonce}
+	ident, err := h.getFlow().Exchange(r.Context(), code, params)
 	if err != nil {
 		slog.Warn("oidc exchange failed", "error", err)
 		http.Error(w, "authentication failed", http.StatusUnauthorized)
@@ -151,6 +166,34 @@ func (h *Handler) callbackHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.redirectWithCode(w, r, sess.Token, entry.redirect)
+}
+
+func (h *Handler) logoutHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET required", http.StatusMethodNotAllowed)
+		return
+	}
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if token != "" {
+		if h.authSrv != nil {
+			_, _ = h.authSrv.Revoke(r.Context(), &authv1.RevokeRequest{Token: token})
+		} else {
+			h.sessions.Revoke(token)
+		}
+	}
+	postLogout := safeRedirect(r.URL, r.URL.Query().Get("redirect"))
+	if postLogout == "/" {
+		postLogout = ""
+	}
+	if endURL := h.getFlow().EndSessionURL(postLogout); endURL != "" {
+		http.Redirect(w, r, endURL, http.StatusFound)
+		return
+	}
+	if postLogout != "" {
+		http.Redirect(w, r, postLogout, http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, "/login", http.StatusFound)
 }
 
 func (h *Handler) exchangeHandler(w http.ResponseWriter, r *http.Request) {
@@ -323,17 +366,15 @@ func safeRedirect(r *url.URL, redirect string) string {
 	if !parsed.IsAbs() {
 		return redirect
 	}
-	if parsed.Host == r.Host {
-		return redirect
-	}
-	knownHosts := map[string]bool{
-		"localhost:8082": true,
-		"localhost:3000": true,
-	}
-	if knownHosts[parsed.Host] {
+	if redirectallow.HostAllowed(r.Host, parsed.Host) {
 		return redirect
 	}
 	return "/"
+}
+
+// SafeRedirectForTest exposes safeRedirect for unit tests.
+func SafeRedirectForTest(r *url.URL, redirect string) string {
+	return safeRedirect(r, redirect)
 }
 
 func setSecurityHeaders(w http.ResponseWriter) {

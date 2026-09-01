@@ -71,6 +71,36 @@ func TestValidateRevokeExtractCan(t *testing.T) {
 	}
 }
 
+func TestCanDeniedAfterRevoke(t *testing.T) {
+	store := testStore(t)
+	sess, err := store.Create("sub-1", "bob", []string{"admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := server.New(store, policy.Builtin())
+	ctx := context.Background()
+
+	can, err := srv.Can(ctx, &authv1.CanRequest{UserId: "sub-1", Action: "manage", Resource: "modules"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !can.Allowed {
+		t.Fatalf("admin should be allowed before revoke: %+v", can)
+	}
+
+	_, err = srv.Revoke(ctx, &authv1.RevokeRequest{Token: sess.Token})
+	if err != nil {
+		t.Fatal(err)
+	}
+	can2, err := srv.Can(ctx, &authv1.CanRequest{UserId: "sub-1", Action: "manage", Resource: "modules"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if can2.Allowed {
+		t.Fatalf("Can should deny after last session revoked: %+v", can2)
+	}
+}
+
 func TestUnimplementedUserCRUD(t *testing.T) {
 	store := testStore(t)
 	srv := server.New(store, policy.Builtin())

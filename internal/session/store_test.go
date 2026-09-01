@@ -65,6 +65,53 @@ func TestExpired(t *testing.T) {
 	}
 }
 
+func TestRevokeDropsIdentity(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(filepath.Join(dir, "sessions.db"), time.Hour)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	sess, err := s.Create("uid-1", "alice", []string{"user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Identity("uid-1"); err != nil {
+		t.Fatalf("Identity before revoke: %v", err)
+	}
+	s.Revoke(sess.Token)
+	if _, err := s.Identity("uid-1"); err == nil {
+		t.Fatal("identity should be removed after last session revoked")
+	}
+}
+
+func TestRevokeKeepsIdentityWithOtherSession(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(filepath.Join(dir, "sessions.db"), time.Hour)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	s1, err := s.Create("uid-1", "alice", []string{"user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s2, err := s.Create("uid-1", "alice", []string{"user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Revoke(s1.Token)
+	if _, err := s.Identity("uid-1"); err != nil {
+		t.Fatal("identity should remain while another session exists")
+	}
+	s.Revoke(s2.Token)
+	if _, err := s.Identity("uid-1"); err == nil {
+		t.Fatal("identity should be removed after all sessions revoked")
+	}
+}
+
 func TestDurableAcrossReopen(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sessions.db")

@@ -36,7 +36,7 @@ install; add it only after you have a local IdP and replace (do not dual-run)
 admin-ui                  auth-oidc                 IdP
    |  GET /login?redirect=     |                      |
    |-------------------------->|                      |
-   |                           |  redirect to /authorize
+   |                           |  redirect to /authorize (PKCE+nonce)
    |                           |--------------------->|
    |                           |  GET /oidc/callback?code=
    |                           |<---------------------|
@@ -46,10 +46,20 @@ admin-ui                  auth-oidc                 IdP
    |-------------------------->|                      |
    |  {token,user_id,...}      |                      |
    |<--------------------------|                      |
+   |  GET /logout (optional)   |                      |
+   |-------------------------->|  revoke session      |
+   |                           |  redirect end_session|
+   |                           |--------------------->|
+   |  /login (SSO again)       |                      |
+   |<--------------------------|                      |
 ```
 
+Admin-ui and media-ui clear their local cookie on `/logout`, then redirect through
+auth-oidc `GET /logout?token=…&redirect=…` when wired for RP-initiated IdP logout.
+
 One-time exchange codes expire in **30 seconds** (same as auth-local).
-Session bearer tokens are opaque SHA-256 hex strings (24h TTL by default).
+Session bearer tokens are opaque SHA-256 hex strings (24h TTL by default, override
+with `AUTH_OIDC_SESSION_TTL`).
 
 ## Configuration
 
@@ -58,24 +68,35 @@ Session bearer tokens are opaque SHA-256 hex strings (24h TTL by default).
 | `AUTH_OIDC_ISSUER` | — | OIDC issuer URL (required for live SSO; unset → soft-disabled) |
 | `AUTH_OIDC_CLIENT_ID` / `CLIENT_ID` | — | Confidential client ID |
 | `AUTH_OIDC_CLIENT_SECRET` / `CLIENT_SECRET` | — | Client secret |
-| `AUTH_OIDC_REDIRECT_URL` / `REDIRECT_URL` | — | Must be `http(s)://<module-http>/oidc/callback` |
+| `AUTH_OIDC_REDIRECT_URL` / `REDIRECT_URL` | — | Must be `http(s)://<module-http>/oidc/callback` (public: `https://auth.zem.systems/oidc/callback`) |
+| `AUTH_OIDC_SCOPES` | `openid profile email` | Extra scopes (e.g. `groups`) |
 | `AUTH_OIDC_GRPC_ADDR` | `:9410` | gRPC listen (AuthService) |
 | `AUTH_OIDC_HTTP_ADDR` | `:9412` | HTTP listen (login / callback / exchange) |
+| `AUTH_OIDC_DB_PATH` | `~/.muxcore/auth-oidc.db` | SQLite session store |
 | `AUTH_OIDC_POLICY_FILE` | `policies.yaml` | RBAC policy |
-| `AUTH_OIDC_ROLES_CLAIM` / `ROLES_CLAIM` | `groups` | Claim holding roles/groups |
+| `AUTH_OIDC_ROLES_CLAIM` / `ROLES_CLAIM` | `groups` | Claim holding roles/groups (supports dotted paths and `resource_access.*.roles`) |
 | `AUTH_OIDC_ROLE_MAP` | — | Optional `IdPRole=localRole,...` map |
 | `AUTH_OIDC_DEFAULT_ROLES` | `user` | Roles when claim empty / unmapped |
+| `AUTH_ALLOWED_REDIRECT_HOSTS` | — | Comma-separated hosts/URLs allowed in `?redirect=` after login |
+| `AUTH_OIDC_SESSION_TTL` | `24h` | MuxCore opaque session lifetime |
+| `ADMIN_UI_PUBLIC_URL` / `MEDIA_UI_PUBLIC_URL` | — | Also allowlisted for post-login redirect (host env on vault) |
 
 Short names `CLIENT_ID`, `CLIENT_SECRET`, `REDIRECT_URL`, and `ROLES_CLAIM` are
 accepted as fallbacks for the `AUTH_OIDC_*` vars.
+
+### MVP stack note
+
+`_mvp/run-host.sh` can start **both** `auth-local` and `auth-oidc` when
+`MVP_ENABLE_AUTH_OIDC=1`, but the mesh expects **one** `AuthProvider`. Use OIDC as
+a swap-in replacement for `auth-local`, not alongside it.
 
 ### Soft-fail (IdP unset)
 
 | Surface | Behavior |
 |---------|----------|
 | `Init` / `Start` | Succeed (module stays up) |
-| `Health` | Error: soft-disabled |
-| `GET /health` | `503` `{"status":"soft-disabled",...}` |
+| `Health` | Error: soft-disabled or IdP unreachable |
+| `GET /health` | `503` when unhealthy |
 | `GET /login`, `/oidc/callback` | `503` OIDC IdP not configured |
 
 ### New dependencies
