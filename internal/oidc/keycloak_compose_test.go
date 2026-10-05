@@ -54,7 +54,13 @@ func deployDir(t *testing.T) string {
 // TestKeycloakComposeDiscovery starts local Keycloak via Docker Compose and
 // verifies OIDC discovery, PKCE auth-code login as alice/alice, and groups claim.
 // Skips when Docker is unavailable.
+// TestKeycloakComposeDiscovery is opt-in: it starts a real Keycloak via
+// `docker compose`, which is slow and unavailable on CI runners. Set
+// AUTH_OIDC_KEYCLOAK_TEST=1 to run it (docker must be available).
 func TestKeycloakComposeDiscovery(t *testing.T) {
+	if os.Getenv("AUTH_OIDC_KEYCLOAK_TEST") != "1" {
+		t.Skip("skipping Keycloak docker compose test; set AUTH_OIDC_KEYCLOAK_TEST=1 to enable")
+	}
 	if !dockerAvailable() {
 		t.Skip("docker not available; Fake IdP unit tests cover login; see deploy/docker-compose.yml for local Keycloak (Authentik also fine)")
 	}
