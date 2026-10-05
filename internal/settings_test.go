@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	modulesdk "github.com/Muxcore-Media/core/sdk/go/module"
+
+	manifest "github.com/Muxcore-Media/auth-oidc"
 )
 
 func TestSettings_PreInit(t *testing.T) {
@@ -34,7 +36,7 @@ func TestSettings_PreInit(t *testing.T) {
 		t.Fatal("unexpected settings order")
 	}
 	info := m.Info()
-	if info.Version != "0.1.2" {
+	if info.Version != modulesdk.ManifestVersion(manifest.ManifestJSON) {
 		t.Fatalf("version=%q", info.Version)
 	}
 	if info.HTTPAddr != ":9412" {

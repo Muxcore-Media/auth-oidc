@@ -17,6 +17,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	manifest "github.com/Muxcore-Media/auth-oidc"
 	"github.com/Muxcore-Media/auth-oidc/internal/oidc"
 	"github.com/Muxcore-Media/auth-oidc/internal/policy"
 	"github.com/Muxcore-Media/auth-oidc/internal/redirectallow"
@@ -196,7 +197,7 @@ func (m *Module) Info() contracts.ModuleInfo {
 	return contracts.ModuleInfo{
 		ID:           m.id,
 		Name:         "Auth OIDC",
-		Version:      "0.1.2",
+		Version:      modulesdk.ManifestVersion(manifest.ManifestJSON),
 		Roles:        []string{"security"},
 		Description:  "OIDC authentication and authorization provider",
 		Author:       "MuxCore",
