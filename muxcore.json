@@ -1,7 +1,7 @@
 {
   "name": "Auth OIDC",
   "description": "Optional OIDC auth (default stacks use auth-local). Soft-fails when IdP unset. Provides AuthProvider, Authorizer, IdentityProvider, and SettingsProvider via an external IdP (Authentik, Keycloak, etc.).",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "author": "MuxCore",
   "roles": [
     "security",

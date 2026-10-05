@@ -3,9 +3,9 @@ module github.com/Muxcore-Media/auth-oidc
 go 1.26.6
 
 require (
-	github.com/Muxcore-Media/core v0.6.12
+	github.com/Muxcore-Media/core v0.6.14
 	github.com/Muxcore-Media/core/pkg/contracts v0.6.0
-	github.com/Muxcore-Media/core/sdk/go/module v0.6.3
+	github.com/Muxcore-Media/core/sdk/go/module v0.6.4
 	github.com/coreos/go-oidc/v3 v3.14.1
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	golang.org/x/oauth2 v0.36.0
