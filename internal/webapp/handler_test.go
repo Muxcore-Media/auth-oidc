@@ -2,6 +2,7 @@ package webapp_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -20,7 +21,7 @@ import (
 
 func testStore(t *testing.T) *session.Store {
 	t.Helper()
-	s, err := session.New(filepath.Join(t.TempDir(), "s.db"), 0)
+	s, err := session.New(context.Background(), filepath.Join(t.TempDir(), "s.db"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +118,7 @@ func TestLoginCallbackExchange(t *testing.T) {
 		t.Fatalf("reuse status=%d", ex2Rec.Code)
 	}
 
-	sess, err := store.Get(resp.Token)
+	sess, err := store.Get(context.Background(), resp.Token)
 	if err != nil {
 		t.Fatalf("session: %v", err)
 	}
@@ -152,7 +153,7 @@ func TestLoginCallbackExchange(t *testing.T) {
 	if revRec.Code != http.StatusOK {
 		t.Fatalf("revoke status=%d", revRec.Code)
 	}
-	if _, err := store.Get(resp.Token); err == nil {
+	if _, err := store.Get(context.Background(), resp.Token); err == nil {
 		t.Fatal("expected miss after revoke")
 	}
 }

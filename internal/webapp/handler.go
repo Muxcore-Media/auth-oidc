@@ -21,28 +21,28 @@ import (
 )
 
 type codeEntry struct {
-	sessToken string
 	expiresAt time.Time
+	sessToken string
 }
 
 type stateEntry struct {
+	expiresAt    time.Time
 	redirect     string
 	pkceVerifier string
 	nonce        string
-	expiresAt    time.Time
 }
 
 // Handler serves the auth-local-compatible browser login contract.
 type Handler struct {
-	sessions   *session.Store
-	authSrv    *server.AuthServer
-	flowMu     sync.RWMutex
-	flow       oidc.Flow
-	codesMu    sync.Mutex
-	codes      map[string]*codeEntry
-	stateMu    sync.Mutex
-	states     map[string]*stateEntry
-	stopCh     chan struct{}
+	flow     oidc.Flow
+	sessions *session.Store
+	authSrv  *server.AuthServer
+	codes    map[string]*codeEntry
+	states   map[string]*stateEntry
+	stopCh   chan struct{}
+	flowMu   sync.RWMutex
+	codesMu  sync.Mutex
+	stateMu  sync.Mutex
 }
 
 func New(sessions *session.Store, authSrv *server.AuthServer, flow oidc.Flow) *Handler {
@@ -93,7 +93,7 @@ func (h *Handler) loginHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "OIDC IdP not configured", http.StatusServiceUnavailable)
 		return
 	}
-	redirect := safeRedirect(r.URL, r.URL.Query().Get("redirect"))
+	redirect := safeRedirect(r.Host, r.URL.Query().Get("redirect"))
 	state, err := randomHex(16)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -158,7 +158,7 @@ func (h *Handler) callbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := h.sessions.Create(ident.Subject, ident.Username, ident.Roles)
+	sess, err := h.sessions.Create(r.Context(), ident.Subject, ident.Username, ident.Roles)
 	if err != nil {
 		slog.Error("create session", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -178,19 +178,20 @@ func (h *Handler) logoutHandler(w http.ResponseWriter, r *http.Request) {
 		if h.authSrv != nil {
 			_, _ = h.authSrv.Revoke(r.Context(), &authv1.RevokeRequest{Token: token})
 		} else {
-			h.sessions.Revoke(token)
+			h.sessions.Revoke(r.Context(), token)
 		}
 	}
-	postLogout := safeRedirect(r.URL, r.URL.Query().Get("redirect"))
+	postLogout := safeRedirect(r.Host, r.URL.Query().Get("redirect"))
 	if postLogout == "/" {
 		postLogout = ""
 	}
 	if endURL := h.getFlow().EndSessionURL(postLogout); endURL != "" {
-		http.Redirect(w, r, endURL, http.StatusFound)
+		// endURL is the IdP's end_session_endpoint from OIDC discovery (operator-configured issuer), not user input.
+		http.Redirect(w, r, endURL, http.StatusFound) //nolint:gosec // G710: IdP-provided end-session URL from discovery, not request-controlled
 		return
 	}
 	if postLogout != "" {
-		http.Redirect(w, r, postLogout, http.StatusFound)
+		http.Redirect(w, r, postLogout, http.StatusFound) //nolint:gosec // G710: postLogout was validated by safeRedirect (same-origin path or allow-listed host)
 		return
 	}
 	http.Redirect(w, r, "/login", http.StatusFound)
@@ -216,7 +217,7 @@ func (h *Handler) exchangeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sess, err := h.sessions.Get(sessToken)
+	sess, err := h.sessions.Get(r.Context(), sessToken)
 	if err != nil {
 		http.Error(w, "session expired", http.StatusUnauthorized)
 		return
@@ -355,7 +356,9 @@ func (h *Handler) cleanup() {
 	}
 }
 
-func safeRedirect(r *url.URL, redirect string) string {
+// safeRedirect accepts same-origin paths and absolute http(s) URLs whose host is
+// allowed for requestHost (the incoming request's Host header).
+func safeRedirect(requestHost, redirect string) string {
 	if redirect == "" {
 		return "/"
 	}
@@ -364,17 +367,31 @@ func safeRedirect(r *url.URL, redirect string) string {
 		return "/"
 	}
 	if !parsed.IsAbs() {
+		// Only same-origin paths are acceptable. A scheme-relative target
+		// ("//evil.example") or one using backslashes ("/\evil.example") is
+		// treated as a host by browsers and would be an open redirect.
+		if parsed.Host != "" || strings.Contains(redirect, `\`) {
+			return "/"
+		}
 		return redirect
 	}
-	if redirectallow.HostAllowed(r.Host, parsed.Host) {
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "/"
+	}
+	if redirectallow.HostAllowed(requestHost, parsed.Host) {
 		return redirect
 	}
 	return "/"
 }
 
+// SafeRedirectForHostForTest exposes safeRedirect for unit tests.
+func SafeRedirectForHostForTest(requestHost, redirect string) string {
+	return safeRedirect(requestHost, redirect)
+}
+
 // SafeRedirectForTest exposes safeRedirect for unit tests.
 func SafeRedirectForTest(r *url.URL, redirect string) string {
-	return safeRedirect(r, redirect)
+	return safeRedirect(r.Host, redirect)
 }
 
 func setSecurityHeaders(w http.ResponseWriter) {

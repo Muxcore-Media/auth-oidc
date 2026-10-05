@@ -74,12 +74,12 @@ type Flow interface {
 
 // Config for a real OIDC provider.
 type Config struct {
+	Mapper       *roles.Mapper
 	Issuer       string
 	ClientID     string
 	ClientSecret string
 	RedirectURL  string
 	Scopes       []string
-	Mapper       *roles.Mapper
 }
 
 // Provider implements Flow against a discovery-capable IdP.
@@ -133,7 +133,7 @@ func NewProvider(ctx context.Context, cfg Config) (*Provider, error) {
 
 func fetchEndSessionEndpoint(ctx context.Context, issuer string) (string, error) {
 	wellKnown := strings.TrimSuffix(issuer, "/") + "/.well-known/openid-configuration"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, wellKnown, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, wellKnown, http.NoBody)
 	if err != nil {
 		return "", err
 	}

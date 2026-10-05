@@ -37,3 +37,15 @@ func TestSafeRedirectLocalDev(t *testing.T) {
 		t.Fatalf("127.0.0.1:5173 redirect=%q", got)
 	}
 }
+
+func TestSafeRedirectRejectsHostSmuggling(t *testing.T) {
+	req, _ := url.Parse("http://127.0.0.1:9412/login")
+	for _, in := range []string{"//evil.example/x", `/\evil.example`, "javascript://localhost:8082/%0aalert(1)"} {
+		if got := webapp.SafeRedirectForTest(req, in); got != "/" {
+			t.Fatalf("redirect %q = %q, want /", in, got)
+		}
+	}
+	if got := webapp.SafeRedirectForTest(req, "/library?x=1"); got != "/library?x=1" {
+		t.Fatalf("same-origin path rewritten: %q", got)
+	}
+}

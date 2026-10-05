@@ -29,57 +29,56 @@ import (
 )
 
 type Module struct {
-	sessions   *session.Store
-	authSrv    *server.AuthServer
-	flow       oidc.Flow
-	grpcSrv    *grpc.Server
-	httpSrv    *http.Server
-	webHandler *webapp.Handler
-	grpcLis    net.Listener
-	httpLis    net.Listener
-	sighupCh   chan os.Signal
-	sighupStop chan struct{}
-	sighupDone chan struct{}
-	cleanupStop chan struct{}
-	cleanupDone chan struct{}
-	cfgMu      sync.RWMutex
-
-	id           string
-	grpcAddr     string
-	httpAddr     string
-	dbPath       string
-	policyFile   string
-	issuer       string
-	clientID     string
-	clientSecret string
-	redirectURL  string
-	scopes       string
-	rolesClaim   string
-	roleMap      string
-	defaultRoles string
+	grpcLis              net.Listener
+	httpLis              net.Listener
+	flow                 oidc.Flow
+	grpcSrv              *grpc.Server
+	httpSrv              *http.Server
+	webHandler           *webapp.Handler
+	sessions             *session.Store
+	authSrv              *server.AuthServer
+	sighupCh             chan os.Signal
+	sighupStop           chan struct{}
+	sighupDone           chan struct{}
+	cleanupStop          chan struct{}
+	cleanupDone          chan struct{}
+	id                   string
+	clientID             string
+	grpcAddr             string
+	httpAddr             string
+	dbPath               string
+	policyFile           string
+	issuer               string
 	allowedRedirectHosts string
-	sessionTTL   time.Duration
+	clientSecret         string
+	redirectURL          string
+	scopes               string
+	rolesClaim           string
+	roleMap              string
+	defaultRoles         string
+	sessionTTL           time.Duration
+	cfgMu                sync.RWMutex
 }
 
 // Config holds module settings. Non-empty fields override environment.
 type Config struct {
-	ID           string
-	GRPCAddr     string
-	HTTPAddr     string
-	DBPath       string
-	PolicyFile   string
-	Issuer       string
-	ClientID     string
-	ClientSecret string
-	RedirectURL  string
-	Scopes       string
-	RolesClaim   string
-	RoleMap      string
-	DefaultRoles string
-	AllowedRedirectHosts string
-	SessionTTL   time.Duration
 	// Flow overrides the OIDC provider (tests).
-	Flow oidc.Flow
+	Flow                 oidc.Flow
+	RedirectURL          string
+	RoleMap              string
+	DBPath               string
+	PolicyFile           string
+	Issuer               string
+	ClientID             string
+	HTTPAddr             string
+	Scopes               string
+	ClientSecret         string
+	RolesClaim           string
+	ID                   string
+	DefaultRoles         string
+	AllowedRedirectHosts string
+	GRPCAddr             string
+	SessionTTL           time.Duration
 }
 
 func NewModule(cfg Config) *Module {
@@ -214,7 +213,7 @@ func (m *Module) Init(ctx context.Context) error {
 	}
 
 	var err error
-	m.sessions, err = session.New(m.dbPath, m.sessionTTL)
+	m.sessions, err = session.New(ctx, m.dbPath, m.sessionTTL)
 	if err != nil {
 		return fmt.Errorf("init sessions: %w", err)
 	}
@@ -230,19 +229,20 @@ func (m *Module) Init(ctx context.Context) error {
 			slog.Warn("OIDC IdP unset; module starts but login soft-fails until AUTH_OIDC_ISSUER, AUTH_OIDC_CLIENT_ID, and AUTH_OIDC_REDIRECT_URL are set (default stacks use auth-local)")
 			m.flow = oidc.Disabled{}
 		} else {
-			flow, err := m.buildProvider(ctx)
-			if err != nil {
-				return fmt.Errorf("init oidc: %w", err)
+			flow, perr := m.buildProvider(ctx)
+			if perr != nil {
+				return fmt.Errorf("init oidc: %w", perr)
 			}
 			m.flow = flow
 		}
 	}
 
-	m.grpcLis, err = net.Listen("tcp", m.grpcAddr)
+	var lc net.ListenConfig
+	m.grpcLis, err = lc.Listen(ctx, "tcp", m.grpcAddr)
 	if err != nil {
 		return fmt.Errorf("listen gRPC %s: %w", m.grpcAddr, err)
 	}
-	m.httpLis, err = net.Listen("tcp", m.httpAddr)
+	m.httpLis, err = lc.Listen(ctx, "tcp", m.httpAddr)
 	if err != nil {
 		return fmt.Errorf("listen HTTP %s: %w", m.httpAddr, err)
 	}
@@ -339,18 +339,18 @@ func (m *Module) Start(ctx context.Context) error {
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
-		_, _ = w.Write([]byte(m.authSrv.Metrics()))
+		_, _ = w.Write([]byte(m.authSrv.Metrics(r.Context())))
 	})
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if err := m.Health(r.Context()); err != nil {
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(fmt.Sprintf(`{"status":"unhealthy","reason":%q}`, err.Error())))
+			_, _ = fmt.Fprintf(w, `{"status":"unhealthy","reason":%q}`, err.Error())
 			return
 		}
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
-	m.httpSrv = &http.Server{Handler: mux}
+	m.httpSrv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		slog.Info("auth-oidc HTTP started", "addr", m.httpAddr)
 		if err := m.httpSrv.Serve(m.httpLis); err != nil && err != http.ErrServerClosed {
@@ -362,6 +362,8 @@ func (m *Module) Start(ctx context.Context) error {
 	cleanupDone := make(chan struct{})
 	m.cleanupStop = cleanupStop
 	m.cleanupDone = cleanupDone
+	// The cleanup loop outlives Start; keep ctx values but not its cancellation.
+	bg := context.WithoutCancel(ctx)
 	go func() {
 		defer close(cleanupDone)
 		ticker := time.NewTicker(5 * time.Minute)
@@ -372,7 +374,7 @@ func (m *Module) Start(ctx context.Context) error {
 				return
 			case <-ticker.C:
 				if m.sessions != nil {
-					_ = m.sessions.CleanupExpired()
+					_ = m.sessions.CleanupExpired(bg)
 				}
 			}
 		}

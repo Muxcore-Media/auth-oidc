@@ -3,6 +3,7 @@ package policy
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -46,12 +47,12 @@ type RoleConfig struct {
 }
 
 type Policy struct {
-	mu    sync.RWMutex
 	roles map[string][]string
+	mu    sync.RWMutex
 }
 
 func Load(path string) (*Policy, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Clean(path))
 	if err != nil {
 		return nil, fmt.Errorf("read policy file: %w", err)
 	}

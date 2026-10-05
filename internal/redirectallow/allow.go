@@ -8,8 +8,8 @@ import (
 )
 
 var (
-	extraMu     sync.RWMutex
-	extraHosts  string
+	extraMu    sync.RWMutex
+	extraHosts string
 )
 
 // SetExtraHosts sets comma-separated hosts/URLs from settings (AUTH_ALLOWED_REDIRECT_HOSTS).

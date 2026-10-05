@@ -39,8 +39,8 @@ func TestProviderPKCEAndNonce(t *testing.T) {
 				"authorization_endpoint":                issuer + "/auth",
 				"token_endpoint":                        issuer + "/token",
 				"jwks_uri":                              issuer + "/jwks",
-				"end_session_endpoint":                    issuer + "/logout",
-				"response_types_supported":                []string{"code"},
+				"end_session_endpoint":                  issuer + "/logout",
+				"response_types_supported":              []string{"code"},
 				"id_token_signing_alg_values_supported": []string{"RS256"},
 			})
 		case r.URL.Path == "/jwks":

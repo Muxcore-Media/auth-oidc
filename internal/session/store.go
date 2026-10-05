@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -18,11 +19,11 @@ const DefaultTTL = 24 * time.Hour
 
 // Session is an opaque bearer session with embedded identity.
 type Session struct {
+	ExpiresAt time.Time
 	Token     string
 	UserID    string
 	Username  string
 	Roles     []string
-	ExpiresAt time.Time
 }
 
 // Identity is the last-known profile for a subject (for Can without a token).
@@ -39,7 +40,7 @@ type Store struct {
 	ttl time.Duration
 }
 
-func New(path string, ttl time.Duration) (*Store, error) {
+func New(ctx context.Context, path string, ttl time.Duration) (*Store, error) {
 	if ttl <= 0 {
 		ttl = DefaultTTL
 	}
@@ -49,14 +50,14 @@ func New(path string, ttl time.Duration) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	s := &Store{db: db, ttl: ttl}
-	if err := s.migrate(); err != nil {
+	if err := s.migrate(ctx); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	return s, nil
 }
 
-func (s *Store) migrate() error {
+func (s *Store) migrate(ctx context.Context) error {
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS sessions (
 			token      TEXT PRIMARY KEY,
@@ -74,7 +75,7 @@ func (s *Store) migrate() error {
 		)`,
 	}
 	for _, q := range queries {
-		if _, err := s.db.Exec(q); err != nil {
+		if _, err := s.db.ExecContext(ctx, q); err != nil {
 			return fmt.Errorf("migrate query: %w", err)
 		}
 	}
@@ -85,7 +86,7 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) Create(userID, username string, roles []string) (*Session, error) {
+func (s *Store) Create(ctx context.Context, userID, username string, roles []string) (*Session, error) {
 	if userID == "" {
 		return nil, fmt.Errorf("user_id required")
 	}
@@ -98,14 +99,14 @@ func (s *Store) Create(userID, username string, roles []string) (*Session, error
 	expiresAt := time.Now().Add(s.ttl)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, err = s.db.Exec(
+	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO sessions (token, user_id, username, roles, expires_at) VALUES (?, ?, ?, ?, ?)`,
 		token, userID, username, string(rolesJSON), expiresAt.Format(time.RFC3339),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create session: %w", err)
 	}
-	_, err = s.db.Exec(
+	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO identities (user_id, username, roles) VALUES (?, ?, ?)
 		 ON CONFLICT(user_id) DO UPDATE SET username = excluded.username, roles = excluded.roles`,
 		userID, username, string(rolesJSON),
@@ -122,8 +123,8 @@ func (s *Store) Create(userID, username string, roles []string) (*Session, error
 	}, nil
 }
 
-func (s *Store) Get(token string) (*Session, error) {
-	row := s.db.QueryRow(
+func (s *Store) Get(ctx context.Context, token string) (*Session, error) {
+	row := s.db.QueryRowContext(ctx,
 		`SELECT token, user_id, username, roles, expires_at FROM sessions WHERE token = ?`,
 		token,
 	)
@@ -139,18 +140,18 @@ func (s *Store) Get(token string) (*Session, error) {
 	sess.ExpiresAt = parseTime(expiresAt)
 	if sess.ExpiresAt.IsZero() {
 		slog.Warn("session has unparseable expiration, treating as expired", "token", token[:min(8, len(token))])
-		s.Delete(token)
+		s.Delete(ctx, token)
 		return nil, fmt.Errorf("session expired")
 	}
 	if time.Now().After(sess.ExpiresAt) {
-		s.Delete(token)
+		s.Delete(ctx, token)
 		return nil, fmt.Errorf("session expired")
 	}
 	return &sess, nil
 }
 
-func (s *Store) Identity(userID string) (*Identity, error) {
-	row := s.db.QueryRow(
+func (s *Store) Identity(ctx context.Context, userID string) (*Identity, error) {
+	row := s.db.QueryRowContext(ctx,
 		`SELECT user_id, username, roles FROM identities WHERE user_id = ?`,
 		userID,
 	)
@@ -166,47 +167,47 @@ func (s *Store) Identity(userID string) (*Identity, error) {
 	return &id, nil
 }
 
-func (s *Store) Delete(token string) {
-	s.Revoke(token)
+func (s *Store) Delete(ctx context.Context, token string) {
+	s.Revoke(ctx, token)
 }
 
 // Revoke deletes a session and drops the identity row when no sessions remain.
-func (s *Store) Revoke(token string) {
+func (s *Store) Revoke(ctx context.Context, token string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	userID := s.deleteSessionLocked(token)
+	userID := s.deleteSessionLocked(ctx, token)
 	if userID != "" {
-		s.cleanupIdentityIfNoSessionsLocked(userID)
+		s.cleanupIdentityIfNoSessionsLocked(ctx, userID)
 	}
 }
 
-func (s *Store) deleteSessionLocked(token string) string {
-	row := s.db.QueryRow(`SELECT user_id FROM sessions WHERE token = ?`, token)
+func (s *Store) deleteSessionLocked(ctx context.Context, token string) string {
+	row := s.db.QueryRowContext(ctx, `SELECT user_id FROM sessions WHERE token = ?`, token)
 	var userID string
 	if err := row.Scan(&userID); err != nil {
 		return ""
 	}
-	_, _ = s.db.Exec(`DELETE FROM sessions WHERE token = ?`, token)
+	_, _ = s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token = ?`, token)
 	return userID
 }
 
-func (s *Store) cleanupIdentityIfNoSessionsLocked(userID string) {
+func (s *Store) cleanupIdentityIfNoSessionsLocked(ctx context.Context, userID string) {
 	var count int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE user_id = ?`, userID).Scan(&count); err != nil || count > 0 {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE user_id = ?`, userID).Scan(&count); err != nil || count > 0 {
 		return
 	}
-	_, _ = s.db.Exec(`DELETE FROM identities WHERE user_id = ?`, userID)
+	_, _ = s.db.ExecContext(ctx, `DELETE FROM identities WHERE user_id = ?`, userID)
 }
 
-func (s *Store) Count() int {
-	_ = s.CleanupExpired()
+func (s *Store) Count(ctx context.Context) int {
+	_ = s.CleanupExpired(ctx)
 	var count int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE expires_at > ?`, time.Now().Format(time.RFC3339)).Scan(&count)
+	_ = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sessions WHERE expires_at > ?`, time.Now().Format(time.RFC3339)).Scan(&count)
 	return count
 }
 
-func (s *Store) CleanupExpired() error {
-	_, err := s.db.Exec(`DELETE FROM sessions WHERE expires_at < ?`, time.Now().Format(time.RFC3339))
+func (s *Store) CleanupExpired(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE expires_at < ?`, time.Now().Format(time.RFC3339))
 	return err
 }
 

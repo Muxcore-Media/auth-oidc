@@ -47,7 +47,7 @@ func (s *AuthServer) SetPolicy(p *policy.Policy) {
 	slog.Info("RBAC policy reloaded")
 }
 
-func (s *AuthServer) Metrics() string {
+func (s *AuthServer) Metrics(ctx context.Context) string {
 	var b strings.Builder
 	b.WriteString("# HELP auth_validate_ok_total Successful Validate calls\n")
 	b.WriteString("# TYPE auth_validate_ok_total counter\n")
@@ -58,7 +58,7 @@ func (s *AuthServer) Metrics() string {
 	if s.sessions != nil {
 		b.WriteString("# HELP auth_sessions_active Current active sessions\n")
 		b.WriteString("# TYPE auth_sessions_active gauge\n")
-		fmt.Fprintf(&b, "auth_sessions_active %d\n", s.sessions.Count())
+		fmt.Fprintf(&b, "auth_sessions_active %d\n", s.sessions.Count(ctx))
 	}
 	return b.String()
 }
@@ -71,10 +71,10 @@ func (s *AuthServer) Authenticate(ctx context.Context, req *authv1.AuthenticateR
 }
 
 func (s *AuthServer) Validate(ctx context.Context, req *authv1.ValidateRequest) (*authv1.ValidateResponse, error) {
-	sess, err := s.sessions.Get(req.Token)
+	sess, err := s.sessions.Get(ctx, req.Token)
 	if err != nil {
 		s.validateFail.Add(1)
-		return &authv1.ValidateResponse{Valid: false, Error: "invalid or expired token"}, nil
+		return &authv1.ValidateResponse{Valid: false, Error: "invalid or expired token"}, nil //nolint:nilerr // gRPC contract reports invalid tokens in the response body, not as an RPC error
 	}
 	s.validateOK.Add(1)
 	return &authv1.ValidateResponse{
@@ -86,14 +86,14 @@ func (s *AuthServer) Validate(ctx context.Context, req *authv1.ValidateRequest) 
 }
 
 func (s *AuthServer) Revoke(ctx context.Context, req *authv1.RevokeRequest) (*authv1.RevokeResponse, error) {
-	s.sessions.Revoke(req.Token)
+	s.sessions.Revoke(ctx, req.Token)
 	return &authv1.RevokeResponse{}, nil
 }
 
 func (s *AuthServer) Can(ctx context.Context, req *authv1.CanRequest) (*authv1.CanResponse, error) {
-	id, err := s.sessions.Identity(req.UserId)
+	id, err := s.sessions.Identity(ctx, req.UserId)
 	if err != nil {
-		return &authv1.CanResponse{Allowed: false, Reason: "user not found"}, nil
+		return &authv1.CanResponse{Allowed: false, Reason: "user not found"}, nil //nolint:nilerr // gRPC contract reports denial in the response body, not as an RPC error
 	}
 	var allowed bool
 	var reason string
@@ -110,7 +110,7 @@ func (s *AuthServer) ExtractIdentity(ctx context.Context, req *authv1.ExtractIde
 		return &authv1.ExtractIdentityResponse{Found: false}, nil
 	}
 	if req.Token != "" {
-		sess, err := s.sessions.Get(req.Token)
+		sess, err := s.sessions.Get(ctx, req.Token)
 		if err == nil {
 			return &authv1.ExtractIdentityResponse{
 				Found: true,

@@ -11,7 +11,7 @@ type Mapper struct {
 	DefaultRoles []string
 }
 
-func NewMapper(claim string, roleMapCSV string, defaultRolesCSV string) *Mapper {
+func NewMapper(claim, roleMapCSV, defaultRolesCSV string) *Mapper {
 	if claim == "" {
 		claim = "groups"
 	}

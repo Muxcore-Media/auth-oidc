@@ -17,7 +17,7 @@ import (
 
 func testStore(t *testing.T) *session.Store {
 	t.Helper()
-	s, err := session.New(filepath.Join(t.TempDir(), "s.db"), 0)
+	s, err := session.New(context.Background(), filepath.Join(t.TempDir(), "s.db"), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -27,7 +27,7 @@ func testStore(t *testing.T) *session.Store {
 
 func TestValidateRevokeExtractCan(t *testing.T) {
 	store := testStore(t)
-	sess, err := store.Create("sub-1", "bob", []string{"admin"})
+	sess, err := store.Create(context.Background(), "sub-1", "bob", []string{"admin"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestValidateRevokeExtractCan(t *testing.T) {
 
 func TestCanDeniedAfterRevoke(t *testing.T) {
 	store := testStore(t)
-	sess, err := store.Create("sub-1", "bob", []string{"admin"})
+	sess, err := store.Create(context.Background(), "sub-1", "bob", []string{"admin"})
 	if err != nil {
 		t.Fatal(err)
 	}
