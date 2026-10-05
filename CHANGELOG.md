@@ -1,6 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [0.1.6] - 2026-10-05
+
+
+### Security
+- `ExtractIdentity` no longer grants a `service` identity from a client-supplied `CallerId`; it is honoured only when the TLS peer certificate chain is verified and its CN equals the `CallerId` (same rule as auth-local; ADR-0017, NFR-SEC-002). Token-only (user) flows unchanged. `Can` only resolves user sessions and grants nothing to bare module IDs.
 
 ## [0.1.3] - 2026-10-05
 

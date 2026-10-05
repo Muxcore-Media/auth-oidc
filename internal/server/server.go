@@ -9,6 +9,8 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
 	authv1 "github.com/Muxcore-Media/core/proto/gen/muxcore/auth/v1"
@@ -120,7 +122,10 @@ func (s *AuthServer) ExtractIdentity(ctx context.Context, req *authv1.ExtractIde
 			}, nil
 		}
 	}
-	if req.CallerId != "" {
+	// A client-supplied CallerId is never trusted on its own (ADR-0017,
+	// NFR-SEC-002): module identity requires a verified mTLS peer whose
+	// certificate CN equals the CallerId.
+	if req.CallerId != "" && verifiedPeerMatches(ctx, req.CallerId) {
 		return &authv1.ExtractIdentityResponse{
 			Found: true,
 			Id:    req.CallerId,
@@ -129,6 +134,21 @@ func (s *AuthServer) ExtractIdentity(ctx context.Context, req *authv1.ExtractIde
 		}, nil
 	}
 	return &authv1.ExtractIdentityResponse{Found: false}, nil
+}
+
+// verifiedPeerMatches reports whether the gRPC peer presented a verified TLS
+// client certificate whose Common Name equals callerID.
+func verifiedPeerMatches(ctx context.Context, callerID string) bool {
+	p, ok := peer.FromContext(ctx)
+	if !ok || p.AuthInfo == nil {
+		return false
+	}
+	ti, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok || len(ti.State.VerifiedChains) == 0 || len(ti.State.PeerCertificates) == 0 {
+		return false
+	}
+	cn := strings.TrimSpace(ti.State.PeerCertificates[0].Subject.CommonName)
+	return cn != "" && cn == strings.TrimSpace(callerID)
 }
 
 func (s *AuthServer) CreateUser(ctx context.Context, req *authv1.CreateUserRequest) (*authv1.CreateUserResponse, error) {
