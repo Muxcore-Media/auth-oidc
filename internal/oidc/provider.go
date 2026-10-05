@@ -14,8 +14,38 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
+	"github.com/Muxcore-Media/core/sdk/go/module/netguard"
+
 	"github.com/Muxcore-Media/auth-oidc/internal/roles"
 )
+
+// oidcGuardOptions is the Integration profile for a household IdP. Authentik
+// and Keycloak often live on the LAN or loopback. Link-local, cloud metadata,
+// and non-HTTP schemes stay refused.
+func oidcGuardOptions() netguard.Options {
+	return netguard.Options{
+		AllowPrivate:  true,
+		AllowLoopback: true,
+		Timeout:       discoveryTimeout,
+	}
+}
+
+func newGuardedClient() *http.Client {
+	return netguard.NewClient(netguard.Integration, oidcGuardOptions())
+}
+
+// ValidateIssuer checks an operator-supplied issuer before discovery. An empty
+// issuer is unset configuration, not a request.
+func ValidateIssuer(raw string) error {
+	return guardOutboundURL(raw)
+}
+
+func guardOutboundURL(raw string) error {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	return netguard.ValidateURL(raw, netguard.Integration, oidcGuardOptions())
+}
 
 // ErrNotConfigured is returned when OIDC IdP settings are unset.
 // The module still starts; login soft-fails until issuer/client/redirect are set.
@@ -87,6 +117,7 @@ type Provider struct {
 	oauth2             oauth2.Config
 	verifier           *oidc.IDTokenVerifier
 	mapper             *roles.Mapper
+	httpClient         *http.Client
 	issuer             string
 	endSessionEndpoint string
 }
@@ -95,11 +126,16 @@ func NewProvider(ctx context.Context, cfg Config) (*Provider, error) {
 	if cfg.Issuer == "" || cfg.ClientID == "" || cfg.RedirectURL == "" {
 		return nil, fmt.Errorf("issuer, client_id, and redirect_url are required")
 	}
+	if err := guardOutboundURL(cfg.Issuer); err != nil {
+		return nil, err
+	}
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, discoveryTimeout)
 		defer cancel()
 	}
+	httpClient := newGuardedClient()
+	ctx = oidc.ClientContext(ctx, httpClient)
 	p, err := oidc.NewProvider(ctx, cfg.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("oidc discovery: %w", err)
@@ -112,9 +148,12 @@ func NewProvider(ctx context.Context, cfg Config) (*Provider, error) {
 	if mapper == nil {
 		mapper = roles.NewMapper("groups", "", "user")
 	}
-	endSession, err := fetchEndSessionEndpoint(ctx, cfg.Issuer)
+	endSession, err := fetchEndSessionEndpoint(ctx, cfg.Issuer, httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("oidc discovery metadata: %w", err)
+	}
+	if err := guardOutboundURL(endSession); err != nil {
+		return nil, fmt.Errorf("oidc end_session_endpoint: %w", err)
 	}
 	return &Provider{
 		oauth2: oauth2.Config{
@@ -126,18 +165,25 @@ func NewProvider(ctx context.Context, cfg Config) (*Provider, error) {
 		},
 		verifier:           p.Verifier(&oidc.Config{ClientID: cfg.ClientID}),
 		mapper:             mapper,
+		httpClient:         httpClient,
 		issuer:             strings.TrimSuffix(cfg.Issuer, "/"),
 		endSessionEndpoint: endSession,
 	}, nil
 }
 
-func fetchEndSessionEndpoint(ctx context.Context, issuer string) (string, error) {
+func fetchEndSessionEndpoint(ctx context.Context, issuer string, client *http.Client) (string, error) {
 	wellKnown := strings.TrimSuffix(issuer, "/") + "/.well-known/openid-configuration"
+	if err := guardOutboundURL(wellKnown); err != nil {
+		return "", err
+	}
+	if client == nil {
+		client = newGuardedClient()
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, wellKnown, http.NoBody)
 	if err != nil {
 		return "", err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -173,6 +219,9 @@ func (p *Provider) Exchange(ctx context.Context, code string, params AuthParams)
 	opts := []oauth2.AuthCodeOption{}
 	if params.PKCEVerifier != "" {
 		opts = append(opts, oauth2.VerifierOption(params.PKCEVerifier))
+	}
+	if p.httpClient != nil {
+		ctx = oidc.ClientContext(ctx, p.httpClient)
 	}
 	tok, err := p.oauth2.Exchange(ctx, code, opts...)
 	if err != nil {
@@ -243,7 +292,7 @@ func (p *Provider) HealthCheck(ctx context.Context) error {
 		ctx, cancel = context.WithTimeout(ctx, discoveryTimeout)
 		defer cancel()
 	}
-	_, err := fetchEndSessionEndpoint(ctx, p.issuer)
+	_, err := fetchEndSessionEndpoint(ctx, p.issuer, p.httpClient)
 	return err
 }
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+- OIDC discovery, token exchange, and the end-session endpoint go through netguard Integration (private LAN and loopback allowed for a household IdP; link-local, cloud metadata, and non-HTTP schemes refused). A blocked issuer is rejected before it is stored (NFR-SEC-009).
+
 ## [0.1.9] - 2026-10-05
 
 

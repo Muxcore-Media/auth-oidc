@@ -124,6 +124,9 @@ func (m *Module) updateSetting(key, value string) error {
 	value = strings.TrimSpace(value)
 	switch key {
 	case "issuer", "AUTH_OIDC_ISSUER":
+		if err := oidc.ValidateIssuer(value); err != nil {
+			return err
+		}
 		return m.applyOIDC(func() { m.issuer = value })
 	case "client_id", "AUTH_OIDC_CLIENT_ID", "CLIENT_ID":
 		return m.applyOIDC(func() { m.clientID = value })
