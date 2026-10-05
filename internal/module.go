@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Muxcore-Media/core/sdk/go/module/meshtls"
+
 	"google.golang.org/grpc"
 
 	manifest "github.com/Muxcore-Media/auth-oidc"
@@ -322,7 +324,11 @@ func (m *Module) ReloadPolicy() error {
 }
 
 func (m *Module) Start(ctx context.Context) error {
-	m.grpcSrv = grpc.NewServer()
+	srv, err := meshtls.NewServer()
+	if err != nil {
+		return fmt.Errorf("gRPC mesh TLS: %w", err)
+	}
+	m.grpcSrv = srv
 	m.authSrv.RegisterWithGRPC(m.grpcSrv)
 	modulesdk.RegisterSettings(m.grpcSrv, m.id, m)
 	go func() {
