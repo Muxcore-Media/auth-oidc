@@ -1,6 +1,7 @@
 # Local IdP for auth-oidc integration tests (Keycloak).
 # No cloud IdP. Authentik is an equally valid alternative — see README.
 #
+#   export KEYCLOAK_ADMIN_PASSWORD="$(openssl rand -hex 16)"   # required; no default
 #   KEYCLOAK_HOST_PORT=18080 docker compose -f deploy/docker-compose.yml up -d
 #   curl -sf http://127.0.0.1:18080/realms/muxcore/.well-known/openid-configuration
 #
@@ -12,7 +13,7 @@ services:
     command: ["start-dev", "--import-realm"]
     environment:
       KEYCLOAK_ADMIN: admin
-      KEYCLOAK_ADMIN_PASSWORD: admin
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:?set KEYCLOAK_ADMIN_PASSWORD}
       KC_HTTP_ENABLED: "true"
       KC_HOSTNAME_STRICT: "false"
       KC_HEALTH_ENABLED: "true"

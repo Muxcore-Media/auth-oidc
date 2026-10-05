@@ -108,7 +108,11 @@ a swap-in replacement for `auth-local`, not alongside it.
 
 No cloud IdP required. When Docker is available:
 
+`KEYCLOAK_ADMIN_PASSWORD` is required (compose refuses to start without it);
+generate one per run:
+
 ```bash
+export KEYCLOAK_ADMIN_PASSWORD="$(openssl rand -hex 16)"
 ./deploy/run-keycloak-test.sh
 # or:
 KEYCLOAK_HOST_PORT=18080 docker compose -f deploy/docker-compose.yml up -d --wait
